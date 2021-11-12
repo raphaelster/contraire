@@ -3,6 +3,7 @@ package corporateAcquisitionIR;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.regex.Pattern;
 
 public class ExtractedResult {
 	public String text, acquiredBusiness, acquiredLocation, dollarAmount, status;
@@ -68,6 +69,8 @@ public class ExtractedResult {
 			strToPropertyIdx.put(properties[i], i);
 		}
 		
+		Pattern minuses = Pattern.compile("[-\\s]+");
+		
 		for (List<String> line : keyFile) {
 			int idx = strToPropertyIdx.get(line.get(0));
 			String rhs = "";
@@ -78,7 +81,9 @@ public class ExtractedResult {
 			
 			rhs = rhs.replace("\"", "");
 			
-			if (rhs.equals("---")) rhs = null;
+			if (minuses.matcher(rhs).matches()) {
+				rhs = null;
+			}
 			else rhs = rhs.substring(0, rhs.length()-1);
 			
 			keyProperties.get(idx).add(rhs);

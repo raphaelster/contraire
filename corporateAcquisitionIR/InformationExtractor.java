@@ -177,6 +177,7 @@ public class InformationExtractor {
 		return (CoreLabel) ((TreeGraphNode) leaf).label();
 	}
 	
+	/*
 	List<IntPair> findInstancesOf(List<TaggedWord> sentence, String word) {
 		List<IntPair> out = new ArrayList<IntPair>();
 		List<String> tokenized = Utility.splitOnSpaces(word);
@@ -188,7 +189,7 @@ public class InformationExtractor {
 		}
 		
 		return out;
-	}
+	}*/
 	
 	private class OutgoingEdge {
 		GrammaticalRelation edge;
@@ -217,7 +218,7 @@ public class InformationExtractor {
 			if (idx < 0 || idx + tokens.size() >= sentence.size()) return 0;
 			
 			for (int i=0; i<tokens.size(); i++) {
-				if (!sentence.get(i + idx).equals(tokens.get(i))) return i; 
+				if (!sentence.get(i + idx).value().equals(tokens.get(i))) return i; 
 			}
 			
 			return tokens.size();
@@ -233,26 +234,76 @@ public class InformationExtractor {
 			
 			return 0;
 		}
+		
+		NamedEntity(List<TaggedWord> sentence, int start, int end) {
+			tokens = new ArrayList<String>();
+			
+			for (int k=start; k<end; k++) {
+				tokens.add(sentence.get(k).value());
+			}
+		}
+		
+		public String toString() {
+			String out = "";
+			
+			for (String s : tokens) out += s + " ";
+			
+			return out.substring(0, out.length()-1);
+		}
 	}
 	
 	private class NamedEntityInstance {
 		public NamedEntity type;
 		public IntPair span;
+		public int nthSentence;
 		
-		public NamedEntityInstance(NamedEntity t, int start, int len) {
-			
+		public NamedEntityInstance(NamedEntity t, int start, int len, int n) {
+			type = t;
+			span = new IntPair(start, start + len);
+			nthSentence = n;
+		}
+		
+		public String toString() {
+			return "("+type.toString()+" ("+span.toString()+") in "+nthSentence+")";
 		}
 	}
 	
 	private class NamedEntityContext {
 		List<NamedEntity> organizations;
 		
-		/*NamedEntity withinOrganizationEntity(List<TaggedWord> sentence, int idx) {
+		NamedEntityContext(ParseInfo info) {
+			organizations = new ArrayList<NamedEntity>();
+			Class answerClass = CoreAnnotations.AnswerAnnotation.class;
+			
+			//for (List<CoreLabel> sentence : info.nerFile) {
+			for (int s = 0; s < info.nerFile.size(); s++) {
+				List<CoreLabel> sentence = info.nerFile.get(s);
+				List<TaggedWord> originalSentence = info.taggedFile.get(s);
+				
+				String previousCase = "";
+				//List<IndexedWord> organizations;
+				
+				for (int i=0; i<sentence.size(); i++) {
+					CoreLabel l = sentence.get(i);
+					
+					String type = l.get(CoreAnnotations.AnswerAnnotation.class);
+					
+					if (type.equalsIgnoreCase("O")) continue;
+					
+					int start = i;
+					for (i = start; i < sentence.size() && sentence.get(i).get(answerClass).equals(type); i++);
+					
+					organizations.add(new NamedEntity(originalSentence, start, i));
+				}
+			}
+		}
+		
+		NamedEntity withinOrganizationEntity(List<TaggedWord> sentence, int idx) {
 			for (NamedEntity ne : organizations) {
-				if (ne.recognizeContains(sentence, idx)) return ne;
+				if (ne.recognizeContains(sentence, idx) > 0) return ne;
 			}
 			return null;
-		}*/
+		}
 		
 		List<NamedEntityInstance> getOrganizationsInSentence(ParseInfo info, int sentenceIdx, NamedEntity subject) {
 			List<NamedEntityInstance> out = new ArrayList<NamedEntityInstance>();
@@ -277,12 +328,12 @@ public class InformationExtractor {
 				
 				//assume that personal pronouns are about the subject
 				// many sentences start with "X company said [they/it] ...
-				if (cur == null && sentence.get(i).tag().equalsIgnoreCase("prp")) {
+				if (cur == null && subject != null && sentence.get(i).tag().equalsIgnoreCase("prp")) {
 					cur = subject;
 					bestMatchLen = 1;
 				}
 				
-				if (cur != null) out.add(new NamedEntityInstance(cur, i, bestMatchLen));
+				if (cur != null) out.add(new NamedEntityInstance(cur, i, bestMatchLen, sentenceIdx));
 			}
 			
 			return out;
@@ -300,22 +351,20 @@ public class InformationExtractor {
 				List<TypedDependency> list = parse.typedDependenciesCCprocessed(Extras.NONE);
 				
 				for (TypedDependency d : list) {
-					if (d.reln().equals("nsubj")) {
+					if (d.reln().getShortName().equals("nsubj")) {
 						int subjIdx = d.dep().index()-1;
 						NamedEntity ent = withinOrganizationEntity(sentence, subjIdx);
 						if (ent == null) {
 							ent = lastSubject;
-							throw new IllegalStateException();
 						}
 						
 						subject = ent;
 						break;
 					}
 				}
-				
-				for (TypedDependency d : list) {
-					
-				}
+
+				List<NamedEntityInstance> cur = getOrganizationsInSentence(info, i, subject);
+				out.addAll(cur);
 				
 				lastSubject = subject;
 			}
@@ -326,6 +375,8 @@ public class InformationExtractor {
 	}
 	
 	List<OutgoingEdge> findOutgoingEdges(ParseInfo info, String entity) {
+		if (entity == null) return new ArrayList<OutgoingEdge>();
+		
 		List<OutgoingEdge> out = new ArrayList<OutgoingEdge>();
 		
 		for (int i=0; i<info.parsedFile.size(); i++) {
@@ -334,13 +385,16 @@ public class InformationExtractor {
 			
 			List<TypedDependency> list = parse.typedDependenciesCCprocessed(Extras.NONE);
 			
-			List<IntPair> allInstances = findInstancesOf(raw, entity);
+			//List<IntPair> allInstances = findInstancesOf(raw, entity);
+			NamedEntityContext context = new NamedEntityContext(info);
 			
-			for (IntPair instance : allInstances) {
+			List<NamedEntityInstance> allInstances = context.getOrganizations(info);
+			
+			for (NamedEntityInstance instance : allInstances) {
 				Set<Integer> relevantIndices = new HashSet<Integer>();
 				
-				for (int k=0; k < instance.get(1); k++) {
-					relevantIndices.add(instance.get(0) + k);
+				for (int k=0; k < instance.span.get(1); k++) {
+					relevantIndices.add(instance.span.get(0) + k);
 				}
 				
 				for (TypedDependency d : list) {
@@ -348,8 +402,8 @@ public class InformationExtractor {
 					IndexedWord gov = d.gov();
 					GrammaticalRelation relation = d.reln();
 					
-					boolean containsDep = instance.get(0) <= dep.index()-1 && dep.index()-1 < instance.get(1);
-					boolean containsGov = instance.get(0) <= gov.index()-1 && gov.index()-1 < instance.get(1);
+					boolean containsDep = instance.span.get(0) <= dep.index()-1 && dep.index()-1 < instance.span.get(1);
+					boolean containsGov = instance.span.get(0) <= gov.index()-1 && gov.index()-1 < instance.span.get(1);
 					
 					int di = dep.index();
 					int gi = gov.index();
@@ -385,9 +439,28 @@ public class InformationExtractor {
 		
 		Queue<TreeGraphNode> path = new ArrayDeque<TreeGraphNode>();
 		path.add(parse);
+
+		List<OutgoingEdge> acquiredBusinessEdges = findOutgoingEdges(trainInfo, actual.acquiredBusiness);
+		List<OutgoingEdge> acquiredLocationEdges = findOutgoingEdges(trainInfo, actual.acquiredLocation);
+		List<OutgoingEdge> dollarAmountEdges     = findOutgoingEdges(trainInfo, actual.dollarAmount);
+		List<OutgoingEdge> statusEdges 			 = findOutgoingEdges(trainInfo, actual.status);
+		List<List<OutgoingEdge>> purchaseEdges   = new ArrayList<List<OutgoingEdge>>();
+		List<List<OutgoingEdge>> acquiredEdges   = new ArrayList<List<OutgoingEdge>>();
+		List<List<OutgoingEdge>> sellerEdges     = new ArrayList<List<OutgoingEdge>>();
 		
-		List<OutgoingEdge> purchaseEdges = findOutgoingEdges(trainInfo, actual.purchasers.get(0));
+		for (String str : actual.purchasers) {
+			purchaseEdges.add(findOutgoingEdges(trainInfo, str));
+		}
+		for (String str : actual.acquired) {
+			acquiredEdges.add(findOutgoingEdges(trainInfo, str));
+		}
+		for (String str : actual.sellers) {
+			sellerEdges.add(  findOutgoingEdges(trainInfo, str));
+		}
 		
+		// = findOutgoingEdges(trainInfo, actual.purchasers.get(0));
+		
+		/*
 		while (path.size() > 0) {
 			TreeGraphNode top = path.remove();
 			
@@ -418,9 +491,11 @@ public class InformationExtractor {
 				System.out.print(lbl.get(CoreAnnotations.TextAnnotation.class)+" ");
 			}
 			System.out.println();
-		}
+		}*/
 		
-		for (OutgoingEdge e : purchaseEdges) System.out.println(e);
+		for (List<OutgoingEdge> pe : purchaseEdges) for (OutgoingEdge e : pe) System.out.println(e);
+		
 		System.out.println(actual.toString());
+		System.out.println();
 	}
 }
