@@ -5,8 +5,8 @@ import java.util.HashMap;
 import java.util.List;
 
 public class ExtractedResult {
-	private String text, acquiredBusiness, acquiredLocation, dollarAmount, status;
-	private List<String> acquired, purchasers, sellers;
+	public String text, acquiredBusiness, acquiredLocation, dollarAmount, status;
+	public List<String> acquired, purchasers, sellers;
 	
 	public ExtractedResult( String _text, List<String> _acquired, String _acqBus, String _acqLoc, String _dlrAmt,
 							List<String> _purchaser, List<String> _seller, String _status) {

@@ -46,4 +46,16 @@ public class Utility {
 		
 		return tokens;
 	}
+	
+	static public List<String> splitOnSpaces(String str) {
+		List<String> out = new ArrayList<String>();
+		String split[] = str.split("\\s+");
+		
+		for (String token : split) {
+			if (token.length() > 0) out.add(token);
+		}
+		
+		
+		return out;
+	}
 }
