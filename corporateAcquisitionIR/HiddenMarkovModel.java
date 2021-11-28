@@ -1,5 +1,6 @@
 package corporateAcquisitionIR;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -17,6 +18,7 @@ enum TargetEvent {
 	EXIT,
 	NO_EVENT
 }
+
 
 /*
 class HMMTransition {
@@ -39,6 +41,7 @@ class HMMState {
 	private HashSet<HMMState> parents;
 	private HashMap<String, LogProb> emissions;
 	private StateType type;
+	
 	
 	public HMMState(StateType t) {
 		transitions = new HashMap<HMMState, LogProb>();
@@ -68,11 +71,16 @@ class HMMState {
 		if (result == null) return new LogProb(0);
 		return result;
 	}
+	//public abstract Map<HMMState, LogProb> get(Map<HMMState, LogProb> in);
+	//public abstract Map<HMMState, LogProb> get(HMMState in);
 	
 	public LogProb getForwardsProbability(HMMState trg, int totalWordsToProcess, List<List<String>> doc, List<List<TargetEvent>> events) {
-		List<Map<HMMState, LogProb>> sparseMap = new ArrayList<Map<HMMState, LogProb>>();
+		return getDirectionalProbability(this, (s) -> {return s.transitions;}, trg, totalWordsToProcess, doc, events);
+		
+		/*List<Map<HMMState, LogProb>> sparseMap = new ArrayList<Map<HMMState, LogProb>>();
 		
 		if (doc.size() == 0) return new LogProb(1);
+		
 		
 		Map<HMMState, LogProb> startNode = new HashMap<HMMState, LogProb>();
 		startNode.put(this, this.getEmissionProbability(doc.get(0).get(0)));
@@ -94,18 +102,79 @@ class HMMState {
 				TargetEvent curEvent = events.get(sIdx).get(i);
 				
 				Map<HMMState, LogProb> top = sparseMap.get(sparseMap.size() - 1);
-				Map<HMMState, LogProb> nextMap = new HashMap<HMMState, LogProb>();
 				
+				Map<HMMState, LogProb> actualTop = top; //(parents for backwards prob);
+				Map<HMMState, Map<HMMState, LogProb>> transitions = new HashMap<HMMState, Map<HMMState, LogProb>>();
+				
+				for (HMMState s : actualTop.keySet()) {
+					transitions.put(s, new HashMap<HMMState, LogProb>());
+					transitions.get(s).putAll(s.transitions);
+				}
+
+				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(actualTop, null, curStr, curEvent);
+			}
+		}
+		
+		LogProb out = new LogProb(1.0);
+
+		return findTargetProbabilityOrSumIfTargetNull(sparseMap.get(sparseMap.size()-1), trg);*/
+	}
+	public LogProb getBackwardsProbability(HMMState trg, int totalWordsToProcess, Set<HMMState> allStates, List<List<String>> doc, List<List<TargetEvent>> events) {
+		DirectionalProbabilityGetTransitionMap mapFunc = (state) -> {
+			Map<HMMState, LogProb> out = new HashMap<HMMState, LogProb>();
+			for (HMMState s : state.parents) {
+				out.put(s, s.transitions.get(state));
+			}
+			return out;
+		};
+		
+		Map<HMMState, LogProb> start = new HashMap<HMMState, LogProb>();
+		
+		for (HMMState s : allStates) start.put(s, new LogProb(1.0));
+		
+		return getDirectionalProbability(start, mapFunc, trg, totalWordsToProcess, doc, events);
+		
+	}
+
+	private interface DirectionalProbabilityGetTransitionMap {
+		public abstract Map<HMMState, LogProb> get(HMMState in);
+	}
+	private static LogProb getDirectionalProbability(Map<HMMState, LogProb> startMap, DirectionalProbabilityGetTransitionMap mapFunc,
+											         HMMState trg, int totalWordsToProcess, List<List<String>> doc, List<List<TargetEvent>> events) {
+		List<Map<HMMState, LogProb>> sparseMap = new ArrayList<Map<HMMState, LogProb>>();
+		
+		if (doc.size() == 0) return new LogProb(1);
+		
+		
+		//Map<HMMState, LogProb> startNode = new HashMap<HMMState, LogProb>();
+		//startNode.put(start, start.getEmissionProbability(doc.get(0).get(0)));
+		sparseMap.add(startMap);
+	
+		int wordsProcessed = 1;
+		
+		search_loop:
+		for (int sIdx=0; sIdx < doc.size(); sIdx++) {
+			List<String> sequence = doc.get(sIdx);
+			
+			int firstIdx = (sIdx == 0 ? 1 : 0);
+			
+			for (int i=firstIdx; i<sequence.size(); i++) {
+				if (wordsProcessed == totalWordsToProcess) break search_loop;
+				wordsProcessed++;
+				
+				String curStr = sequence.get(i);
+				TargetEvent curEvent = events.get(sIdx).get(i);
+				
+				Map<HMMState, LogProb> top = sparseMap.get(sparseMap.size() - 1);
+				
+				Map<HMMState, Map<HMMState, LogProb>> transitions = new HashMap<HMMState, Map<HMMState, LogProb>>();
 				
 				for (HMMState s : top.keySet()) {
-					for (HMMState nextState : s.transitions.keySet()) {
-						if (!isLegalTransition(s, nextState, curEvent)) continue;
-						
-						if (!nextMap.containsKey(nextState)) nextMap.put(s, new LogProb(1.0));
-						
-						nextMap.put(s, s.getEmissionProbability(curStr).add(nextMap.get(s)));
-					}
+					transitions.put(s, new HashMap<HMMState, LogProb>());
+					transitions.get(s).putAll(mapFunc.get(s));
 				}
+
+				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, null, curStr, curEvent);
 			}
 		}
 		
@@ -114,49 +183,6 @@ class HMMState {
 		return findTargetProbabilityOrSumIfTargetNull(sparseMap.get(sparseMap.size()-1), trg);
 	}
 	
-
-	public LogProb getBackwardsProbability(HMMState trg, int totalWordsToProcess, List<List<String>> doc, List<List<TargetEvent>> events) {
-		List<Map<HMMState, LogProb>> sparseMap = new ArrayList<Map<HMMState, LogProb>>();
-		
-		if (doc.size() == 0) return new LogProb(1);
-		
-		Map<HMMState, LogProb> startNode = new HashMap<HMMState, LogProb>();
-		startNode.put(this, this.getEmissionProbability(doc.get(0).get(0)));
-		sparseMap.add(startNode);
-	
-		int wordsProcessed = 1;
-		
-		search_loop:
-		for (int sIdx=0; sIdx < doc.size(); sIdx++) {
-			List<String> sequence = doc.get(sIdx);
-			
-			int firstIdx = (sIdx == 0 ? 1 : 0);
-			
-			for (int i=firstIdx; i<sequence.size(); i++) {
-				if (wordsProcessed == totalWordsToProcess) break search_loop;
-				wordsProcessed++;
-				
-				String curStr = sequence.get(i);
-				TargetEvent curEvent = events.get(sIdx).get(i);
-				
-				Map<HMMState, LogProb> top = sparseMap.get(sparseMap.size() - 1);
-				Map<HMMState, LogProb> nextMap = new HashMap<HMMState, LogProb>();
-				
-				
-				for (HMMState s : top.keySet()) {
-					for (HMMState nextState : s.transitions.keySet()) {
-						if (!isLegalTransition(s, nextState, curEvent)) continue;
-						
-						if (!nextMap.containsKey(nextState)) nextMap.put(s, new LogProb(1.0));
-						
-						nextMap.put(s, s.getEmissionProbability(curStr).add(nextMap.get(s)));
-					}
-				}
-			}
-		}
-		
-		return findTargetProbabilityOrSumIfTargetNull(sparseMap.get(sparseMap.size()-1), trg);
-	}
 	private static Map<HMMState, LogProb> directionalProbabilityStep(Map<HMMState, LogProb> cur, Map<HMMState, Map<HMMState, LogProb>> allTransitions, 
 																	 String curString, TargetEvent curEvent) {
 		Map<HMMState, LogProb> outMap = new HashMap<HMMState, LogProb>();
@@ -319,6 +345,7 @@ class HMMState {
 		
 		return matching;
 	}
+	
 }
 
 public class HiddenMarkovModel {
