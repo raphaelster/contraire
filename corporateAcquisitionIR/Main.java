@@ -1,8 +1,12 @@
 package corporateAcquisitionIR;
 
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -23,22 +27,33 @@ public class Main {
 	public static void main(String[] args) {
 		List<List<String>> documentFilepathList;
 		
+		TrainingData data = null;
 
 		try {
 			documentFilepathList = Utility.readFile(args[0], false);
+			ObjectInputStream objIn = new ObjectInputStream(new FileInputStream("./rules.ser"));
+			
+			data = (TrainingData) objIn.readObject();
+			
+			objIn.close();
 		}
 		catch (FileNotFoundException e) {
 			System.out.println("FileNotFoundException:\n"+e.getMessage());
 			return;
 		}
+		catch (Exception e) {
+			System.out.println("Exception:\n"+e.getMessage());
+			return;
+		}
 		
+		data.eraseBadRules(-1, 12.0);
 		
 		InformationExtractor model = new InformationExtractor();
 
 		try {
 			for (List<String> list : documentFilepathList) {
 				for (String path : list) {
-					System.out.println(model.extract(Utility.readFile(path, false), getFilename(path)));
+					System.out.println(model.extract(Utility.readFile(path, false), getFilename(path), data));
 				}
 			}
 		}

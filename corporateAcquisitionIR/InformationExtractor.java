@@ -48,19 +48,6 @@ public class InformationExtractor {
 	DependencyParser parser;
 	
 	
-	private class ParseInfo {
-		public List<List<String>> rawFile;
-		public List<List<TaggedWord>> taggedFile;
-		public List<List<CoreLabel>> nerFile;
-		public List<GrammaticalStructure> parsedFile;
-		
-		public ParseInfo(List<List<String>> r, List<List<TaggedWord>> t, List<List<CoreLabel>> n, List<GrammaticalStructure> p) {
-			rawFile = r;
-			taggedFile = t;
-			nerFile = n;
-			parsedFile = p;
-		}
-	}
 	
 	public InformationExtractor() {
 		tagger = new MaxentTagger("lib/tagger/english-left3words-distsim.tagger");
@@ -133,32 +120,10 @@ public class InformationExtractor {
 		return new ParseInfo(file, taggedFile, nerFile, parses);
 	}
 	
-	public ExtractedResult extract(List<List<String>> file, String name) {
-		//do_stuff();
-		for (List<String> line : file) {
-			for (String token : line) {
-				System.out.print(token+" ");
-			}
-			System.out.println();
-		}
+	public ExtractedResult extract(List<List<String>> file, String name, TrainingData data) {
 		
 		ParseInfo info = parseFile(file);
 
-	    //TreePrint tp = new TreePrint("penn,typedDependenciesCollapsed");
-	    
-	    //for (Tree t : parses) tp.printTree(t);
-	    
-		
-		
-		
-		/*for (List<CoreLabel> sentence : nerFile) {
-			for (CoreLabel word : sentence) {
-				System.out.print(word.get(CoreAnnotations.TextAnnotation.class)+"/");
-				System.out.print(word.get(CoreAnnotations.AnswerAnnotation.class)+" ");
-			}
-			System.out.println();
-		}*/
-		
 		for (int i=0; i<info.nerFile.size(); i++) {
 			for (int j=0; j < info.nerFile.get(i).size(); j++) {
 				CoreLabel cWord = info.nerFile.get(i).get(j);
@@ -177,207 +142,11 @@ public class InformationExtractor {
 		return (CoreLabel) ((TreeGraphNode) leaf).label();
 	}
 	
-	/*
-	List<IntPair> findInstancesOf(List<TaggedWord> sentence, String word) {
-		List<IntPair> out = new ArrayList<IntPair>();
-		List<String> tokenized = Utility.splitOnSpaces(word);
-		
-		for (int i=0; i<sentence.size() - tokenized.size(); i++) {
-			int len = 0;
-			while (len < tokenized.size() && sentence.get(i+len).value().equals(tokenized.get(len)) ) len++;
-			if (len == tokenized.size()) out.add(new IntPair(i, len));
-		}
-		
-		return out;
-	}*/
 	
-	private class OutgoingEdge {
-		GrammaticalRelation edge;
-		IndexedWord word;
-		String root;
-		boolean rootParent;
+	List<ExtractionPattern> findOutgoingEdges(ParseInfo info, String entity) {
+		if (entity == null) return new ArrayList<ExtractionPattern>();
 		
-		public OutgoingEdge(String r, GrammaticalRelation e, IndexedWord w, boolean rp) {
-			edge = e;
-			word = w;
-			root = r;
-			rootParent = rp;
-		}
-		
-		public String toString() {
-			if (rootParent) return root+" --["+edge.toString()+"]-> "+word.toString();
-			else return root+" <-["+edge.toString()+"]-- "+word.toString();
-		}
-	}
-	
-	private class NamedEntity {//assumes organization
-		List<String> tokens;
-
-		//returns len of recognition; 0 == not recognized
-		int recognizeStartsAt(List<TaggedWord> sentence, int idx) {
-			if (idx < 0 || idx + tokens.size() >= sentence.size()) return 0;
-			
-			for (int i=0; i<tokens.size(); i++) {
-				if (!sentence.get(i + idx).value().equals(tokens.get(i))) return i; 
-			}
-			
-			return tokens.size();
-		}
-		
-		//returns len of recognition; 0 == not recognized
-		int recognizeContains(List<TaggedWord> sentence, int idx) {
-			for (int offset = -tokens.size() + 1; offset <= 0; offset++) {
-				//if (idx + offset < 0 || idx + offset + tokens.size() > sentence.size()) continue;
-				int k = recognizeStartsAt(sentence, idx + offset);
-				if (k > 0) return k;
-			}
-			
-			return 0;
-		}
-		
-		NamedEntity(List<TaggedWord> sentence, int start, int end) {
-			tokens = new ArrayList<String>();
-			
-			for (int k=start; k<end; k++) {
-				tokens.add(sentence.get(k).value());
-			}
-		}
-		
-		public String toString() {
-			String out = "";
-			
-			for (String s : tokens) out += s + " ";
-			
-			return out.substring(0, out.length()-1);
-		}
-	}
-	
-	private class NamedEntityInstance {
-		public NamedEntity type;
-		public IntPair span;
-		public int nthSentence;
-		
-		public NamedEntityInstance(NamedEntity t, int start, int len, int n) {
-			type = t;
-			span = new IntPair(start, start + len);
-			nthSentence = n;
-		}
-		
-		public String toString() {
-			return "("+type.toString()+" ("+span.toString()+") in "+nthSentence+")";
-		}
-	}
-	
-	private class NamedEntityContext {
-		List<NamedEntity> organizations;
-		
-		NamedEntityContext(ParseInfo info) {
-			organizations = new ArrayList<NamedEntity>();
-			Class answerClass = CoreAnnotations.AnswerAnnotation.class;
-			
-			//for (List<CoreLabel> sentence : info.nerFile) {
-			for (int s = 0; s < info.nerFile.size(); s++) {
-				List<CoreLabel> sentence = info.nerFile.get(s);
-				List<TaggedWord> originalSentence = info.taggedFile.get(s);
-				
-				String previousCase = "";
-				//List<IndexedWord> organizations;
-				
-				for (int i=0; i<sentence.size(); i++) {
-					CoreLabel l = sentence.get(i);
-					
-					String type = l.get(CoreAnnotations.AnswerAnnotation.class);
-					
-					if (type.equalsIgnoreCase("O")) continue;
-					
-					int start = i;
-					for (i = start; i < sentence.size() && sentence.get(i).get(answerClass).equals(type); i++);
-					
-					organizations.add(new NamedEntity(originalSentence, start, i));
-				}
-			}
-		}
-		
-		NamedEntity withinOrganizationEntity(List<TaggedWord> sentence, int idx) {
-			for (NamedEntity ne : organizations) {
-				if (ne.recognizeContains(sentence, idx) > 0) return ne;
-			}
-			return null;
-		}
-		
-		List<NamedEntityInstance> getOrganizationsInSentence(ParseInfo info, int sentenceIdx, NamedEntity subject) {
-			List<NamedEntityInstance> out = new ArrayList<NamedEntityInstance>();
-			
-			GrammaticalStructure parse = info.parsedFile.get(sentenceIdx);
-			List<TaggedWord> sentence = info.taggedFile.get(sentenceIdx);
-			List<TypedDependency> list = parse.typedDependenciesCCprocessed();
-			
-			
-			for (int i=0; i<sentence.size(); i++) {
-				NamedEntity cur = null;
-				int bestMatchLen = 0;
-				
-				for (NamedEntity e : organizations) {
-					int len = e.recognizeStartsAt(sentence, i);
-					if (len > bestMatchLen) {
-						cur = e;
-						bestMatchLen = len;
-						break;
-					}
-				}
-				
-				//assume that personal pronouns are about the subject
-				// many sentences start with "X company said [they/it] ...
-				if (cur == null && subject != null && sentence.get(i).tag().equalsIgnoreCase("prp")) {
-					cur = subject;
-					bestMatchLen = 1;
-				}
-				
-				if (cur != null) out.add(new NamedEntityInstance(cur, i, bestMatchLen, sentenceIdx));
-			}
-			
-			return out;
-		}
-		
-		List<NamedEntityInstance> getOrganizations(ParseInfo info) {
-			NamedEntity subject = null;
-			NamedEntity lastSubject = null;
-			
-			List<NamedEntityInstance> out = new ArrayList<NamedEntityInstance>();
-			
-			for (int i=0; i<info.taggedFile.size(); i++) {
-				GrammaticalStructure parse = info.parsedFile.get(i);
-				List<TaggedWord> sentence = info.taggedFile.get(i);
-				List<TypedDependency> list = parse.typedDependenciesCCprocessed(Extras.NONE);
-				
-				for (TypedDependency d : list) {
-					if (d.reln().getShortName().equals("nsubj")) {
-						int subjIdx = d.dep().index()-1;
-						NamedEntity ent = withinOrganizationEntity(sentence, subjIdx);
-						if (ent == null) {
-							ent = lastSubject;
-						}
-						
-						subject = ent;
-						break;
-					}
-				}
-
-				List<NamedEntityInstance> cur = getOrganizationsInSentence(info, i, subject);
-				out.addAll(cur);
-				
-				lastSubject = subject;
-			}
-			
-			
-			return out;
-		}
-	}
-	
-	List<OutgoingEdge> findOutgoingEdges(ParseInfo info, String entity) {
-		if (entity == null) return new ArrayList<OutgoingEdge>();
-		
-		List<OutgoingEdge> out = new ArrayList<OutgoingEdge>();
+		List<ExtractionPattern> out = new ArrayList<ExtractionPattern>();
 		
 		for (int i=0; i<info.parsedFile.size(); i++) {
 			GrammaticalStructure parse = info.parsedFile.get(i);
@@ -386,11 +155,11 @@ public class InformationExtractor {
 			List<TypedDependency> list = parse.typedDependenciesCCprocessed(Extras.NONE);
 			
 			//List<IntPair> allInstances = findInstancesOf(raw, entity);
-			NamedEntityContext context = new NamedEntityContext(info);
+			EntityContext context = new EntityContext(info);
 			
-			List<NamedEntityInstance> allInstances = context.getOrganizations(info);
+			List<EntityInstance> allInstances = context.getOrganizations(info);
 			
-			for (NamedEntityInstance instance : allInstances) {
+			for (EntityInstance instance : allInstances) {
 				Set<Integer> relevantIndices = new HashSet<Integer>();
 				
 				for (int k=0; k < instance.span.get(1); k++) {
@@ -410,8 +179,8 @@ public class InformationExtractor {
 					
 					if (containsDep == containsGov) continue;
 					
-					if (containsDep) out.add(new OutgoingEdge(entity, relation, gov, false));
-					else		 	 out.add(new OutgoingEdge(entity, relation, dep, true));
+					if (containsDep) out.add(new ExtractionPattern(instance.type, relation, gov, false));
+					else		 	 out.add(new ExtractionPattern(instance.type, relation, dep, true));
 				}
 			}
 		}
@@ -419,34 +188,36 @@ public class InformationExtractor {
 		return out;
 	}
 	
-	void trainOn(List<List<String>> train, List<List<String>> key) {
+	private static List<ExtractionPattern> condense(List<List<ExtractionPattern>> in) {
+		List<ExtractionPattern> out = new ArrayList<ExtractionPattern>();
+		
+		for (List<ExtractionPattern> line : in) out.addAll(line);
+		
+		return out;
+	}
+	
+	TrainingData trainOn(List<List<String>> train, List<List<String>> key) {
 		ParseInfo trainInfo = parseFile(train);
 		
 		ExtractedResult actual = ExtractedResult.fromKey(key);
 		
-		GrammaticalStructure _parse = trainInfo.parsedFile.get(0);
-		TreeGraphNode parse = _parse.root();
-		
 		for (List<String> sentence : train) {
-			for (String word : sentence) System.out.print(word + " ");
-			System.out.println();
+			//for (String word : sentence) System.out.print(word + " ");
+			//System.out.println();
 		}
 		
 		//Tree commonParentOf()
 		//Tree getCommonParent(Tree root, List<String> sequence) {
 		//	List<Tree> leaves = root.getLeaves();
 		//}
-		
-		Queue<TreeGraphNode> path = new ArrayDeque<TreeGraphNode>();
-		path.add(parse);
 
-		List<OutgoingEdge> acquiredBusinessEdges = findOutgoingEdges(trainInfo, actual.acquiredBusiness);
-		List<OutgoingEdge> acquiredLocationEdges = findOutgoingEdges(trainInfo, actual.acquiredLocation);
-		List<OutgoingEdge> dollarAmountEdges     = findOutgoingEdges(trainInfo, actual.dollarAmount);
-		List<OutgoingEdge> statusEdges 			 = findOutgoingEdges(trainInfo, actual.status);
-		List<List<OutgoingEdge>> purchaseEdges   = new ArrayList<List<OutgoingEdge>>();
-		List<List<OutgoingEdge>> acquiredEdges   = new ArrayList<List<OutgoingEdge>>();
-		List<List<OutgoingEdge>> sellerEdges     = new ArrayList<List<OutgoingEdge>>();
+		List<ExtractionPattern> acquiredBusinessEdges = findOutgoingEdges(trainInfo, actual.acquiredBusiness);
+		List<ExtractionPattern> acquiredLocationEdges = findOutgoingEdges(trainInfo, actual.acquiredLocation);
+		List<ExtractionPattern> dollarAmountEdges     = findOutgoingEdges(trainInfo, actual.dollarAmount);
+		List<ExtractionPattern> statusEdges 			 = findOutgoingEdges(trainInfo, actual.status);
+		List<List<ExtractionPattern>> purchaseEdges   = new ArrayList<List<ExtractionPattern>>();
+		List<List<ExtractionPattern>> acquiredEdges   = new ArrayList<List<ExtractionPattern>>();
+		List<List<ExtractionPattern>> sellerEdges     = new ArrayList<List<ExtractionPattern>>();
 		
 		for (String str : actual.purchasers) {
 			purchaseEdges.add(findOutgoingEdges(trainInfo, str));
@@ -458,44 +229,40 @@ public class InformationExtractor {
 			sellerEdges.add(  findOutgoingEdges(trainInfo, str));
 		}
 		
-		// = findOutgoingEdges(trainInfo, actual.purchasers.get(0));
+		TrainingData out = new TrainingData(acquiredBusinessEdges, acquiredLocationEdges, dollarAmountEdges, statusEdges,
+											condense(purchaseEdges), condense(acquiredEdges), condense(sellerEdges));
 		
-		/*
-		while (path.size() > 0) {
-			TreeGraphNode top = path.remove();
+		//for (List<ExtractionPattern> pe : purchaseEdges) for (ExtractionPattern e : pe) System.out.println(e);
+		
+		//System.out.println(actual.toString());
+		//System.out.println();
+		
+		return out;
+	}
+	
+	void testPatterns(List<List<String>> train, List<List<String>> key, TrainingData data) {
+		ParseInfo trainInfo = parseFile(train);
+		EntityContext context = new EntityContext(trainInfo);
+		
+		ExtractedResult actual = ExtractedResult.fromKey(key);
+		
+		for (int i=0; i<trainInfo.parsedFile.size(); i++) {
+			GrammaticalStructure sentence = trainInfo.parsedFile.get(i);
+			List<TaggedWord> taggedWords = trainInfo.taggedFile.get(i);
 			
-			if (!top.isLeaf()) for (TreeGraphNode t : top.children()) path.add(t);
+			List<TypedDependency> list = sentence.typedDependenciesCCprocessed();
 			
-			
-			Set<Constituent> scet = top.constituents();
-			System.out.println(top);
-			
-			
-			System.out.println(top.getClass());
-			IntPair span = top.getSpan();
-			CoreLabel label = (CoreLabel) top.label();
-			String val = top.value();
-			boolean leaf = top.isLeaf();
-			
-			String word = "";
-			if (leaf) word = label.get(CoreAnnotations.TextAnnotation.class);
-			String pos = "?";
-			if (leaf) pos = label.get(CoreAnnotations.PositionAnnotation.class);
-			//int start = label.get(CoreAnnotations.CharacterOffsetBeginAnnotation.class)-1;
-			//int end = label.get(CoreAnnotations.CharacterOffsetEndAnnotation.class)-1;
-			
-			System.out.println(word+" @"+pos+"");
-			for (Tree l : top.getLeaves()) {
-				CoreLabel lbl = getLabel(l);
-				
-				System.out.print(lbl.get(CoreAnnotations.TextAnnotation.class)+" ");
+			for (TypedDependency d : list) {
+				for (ExtractionPattern e : data.acquiredBusinessEdges.values()) {
+					IndexedWord word = e.checkApplies(d);
+					if (word == null) continue;
+					
+					e.totalCount++;
+					Entity ent = context.withinOrganizationEntity(taggedWords, word.index());
+					
+					if (ent != null && ent.recognizeContainsString(actual.acquired, 0) > 0) e.correctCount++; 
+				}
 			}
-			System.out.println();
-		}*/
-		
-		for (List<OutgoingEdge> pe : purchaseEdges) for (OutgoingEdge e : pe) System.out.println(e);
-		
-		System.out.println(actual.toString());
-		System.out.println();
+		}
 	}
 }
