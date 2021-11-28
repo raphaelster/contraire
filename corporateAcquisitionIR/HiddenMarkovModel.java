@@ -1,11 +1,11 @@
 package corporateAcquisitionIR;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Stack;
 
 enum StateType {
 	PREFIX,
@@ -36,18 +36,56 @@ class HMMTransition {
 
 class HMMState {
 	private static final boolean IGNORE_CASE = false;
+	private static int maxID = 0;
 	
 	private HashMap<HMMState, LogProb> transitions;
 	private HashSet<HMMState> parents;
 	private HashMap<String, LogProb> emissions;
 	private StateType type;
+	private int id;
 	
+	LogProb defaultEmissionProbability;
 	
 	public HMMState(StateType t) {
 		transitions = new HashMap<HMMState, LogProb>();
 		emissions = new HashMap<String, LogProb>();
 		parents = new HashSet<HMMState>();
+		defaultEmissionProbability = new LogProb(0);
 		type = t;
+		id = maxID++;
+	}
+	
+	private String getToStringWithoutChildren() {
+		String out = "State"+id+"_";
+		
+		switch (type) {
+		case PREFIX:
+			out += "PREF";
+			break;			
+		case SUFFIX:
+			out += "SUFF";
+			break;			
+		case TARGET:
+			out += "TARG";
+			break;
+		case BACKGROUND:
+			out += "BACK";
+			break;
+		}
+		
+		return out;
+	}
+	
+	public String toString() {
+		String out = getToStringWithoutChildren();
+		out += " [";
+		
+		for (HMMState s : transitions.keySet()) {
+			out += transitions.get(s) + " -> " + s.getToStringWithoutChildren() + ", ";
+		}
+		
+		if (transitions.keySet().size() > 0) out = out.substring(0, out.length()-2);
+		return out + "]";
 	}
 	
 	public HMMState shallowCopy() {
@@ -63,7 +101,7 @@ class HMMState {
 		if (IGNORE_CASE) word = word.toLowerCase();
 		
 		if (emissions.containsKey(word)) return emissions.get(word);
-		return null;
+		return defaultEmissionProbability;
 	}
 	
 	public LogProb getProbabilityTo(HMMState next) {
@@ -71,13 +109,9 @@ class HMMState {
 		if (result == null) return new LogProb(0);
 		return result;
 	}
-	//public abstract Map<HMMState, LogProb> get(Map<HMMState, LogProb> in);
-	//public abstract Map<HMMState, LogProb> get(HMMState in);
 	
 	public LogProb getForwardsProbability(HMMState trg, int totalWordsToProcess, List<List<String>> doc, List<List<TargetEvent>> events) {
-		return getDirectionalProbability(this, (s) -> {return s.transitions;}, trg, totalWordsToProcess, doc, events);
-		
-		/*List<Map<HMMState, LogProb>> sparseMap = new ArrayList<Map<HMMState, LogProb>>();
+		List<Map<HMMState, LogProb>> sparseMap = new ArrayList<Map<HMMState, LogProb>>();
 		
 		if (doc.size() == 0) return new LogProb(1);
 		
@@ -103,63 +137,44 @@ class HMMState {
 				
 				Map<HMMState, LogProb> top = sparseMap.get(sparseMap.size() - 1);
 				
-				Map<HMMState, LogProb> actualTop = top; //(parents for backwards prob);
 				Map<HMMState, Map<HMMState, LogProb>> transitions = new HashMap<HMMState, Map<HMMState, LogProb>>();
 				
-				for (HMMState s : actualTop.keySet()) {
+				for (HMMState s : top.keySet()) {
 					transitions.put(s, new HashMap<HMMState, LogProb>());
 					transitions.get(s).putAll(s.transitions);
 				}
 
-				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(actualTop, null, curStr, curEvent);
+				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent);
+				sparseMap.add(nextMap);
 			}
 		}
-		
-		LogProb out = new LogProb(1.0);
 
-		return findTargetProbabilityOrSumIfTargetNull(sparseMap.get(sparseMap.size()-1), trg);*/
-	}
-	public LogProb getBackwardsProbability(HMMState trg, int totalWordsToProcess, Set<HMMState> allStates, List<List<String>> doc, List<List<TargetEvent>> events) {
-		DirectionalProbabilityGetTransitionMap mapFunc = (state) -> {
-			Map<HMMState, LogProb> out = new HashMap<HMMState, LogProb>();
-			for (HMMState s : state.parents) {
-				out.put(s, s.transitions.get(state));
-			}
-			return out;
-		};
-		
-		Map<HMMState, LogProb> start = new HashMap<HMMState, LogProb>();
-		
-		for (HMMState s : allStates) start.put(s, new LogProb(1.0));
-		
-		return getDirectionalProbability(start, mapFunc, trg, totalWordsToProcess, doc, events);
-		
+		return findTargetProbabilityOrSumIfTargetNull(sparseMap.get(sparseMap.size()-1), trg);
 	}
 
-	private interface DirectionalProbabilityGetTransitionMap {
-		public abstract Map<HMMState, LogProb> get(HMMState in);
-	}
-	private static LogProb getDirectionalProbability(Map<HMMState, LogProb> startMap, DirectionalProbabilityGetTransitionMap mapFunc,
-											         HMMState trg, int totalWordsToProcess, List<List<String>> doc, List<List<TargetEvent>> events) {
+	public LogProb getBackwardsProbability(HMMState trg, Set<HMMState> allStates, int stopAtIthWord, List<List<String>> doc, List<List<TargetEvent>> events) {
 		List<Map<HMMState, LogProb>> sparseMap = new ArrayList<Map<HMMState, LogProb>>();
 		
 		if (doc.size() == 0) return new LogProb(1);
 		
 		
-		//Map<HMMState, LogProb> startNode = new HashMap<HMMState, LogProb>();
-		//startNode.put(start, start.getEmissionProbability(doc.get(0).get(0)));
-		sparseMap.add(startMap);
+		Map<HMMState, LogProb> startNode = new HashMap<HMMState, LogProb>();
+		for (HMMState s : allStates) startNode.put(s, new LogProb(1.0));
+		sparseMap.add(startNode);
 	
+		int totalSize = 0;
+		for (List<String> sentence : doc) totalSize += sentence.size();
+		
+		final int LAST_WORD = totalSize - stopAtIthWord;
+		
 		int wordsProcessed = 1;
 		
 		search_loop:
-		for (int sIdx=0; sIdx < doc.size(); sIdx++) {
+		for (int sIdx=doc.size()-1; sIdx >= 0; sIdx--) {
 			List<String> sequence = doc.get(sIdx);
 			
-			int firstIdx = (sIdx == 0 ? 1 : 0);
-			
-			for (int i=firstIdx; i<sequence.size(); i++) {
-				if (wordsProcessed == totalWordsToProcess) break search_loop;
+			for (int i=sequence.size()-1; i>=0; i--) {
+				if (wordsProcessed == LAST_WORD) break search_loop;
 				wordsProcessed++;
 				
 				String curStr = sequence.get(i);
@@ -171,14 +186,13 @@ class HMMState {
 				
 				for (HMMState s : top.keySet()) {
 					transitions.put(s, new HashMap<HMMState, LogProb>());
-					transitions.get(s).putAll(mapFunc.get(s));
+					transitions.get(s).putAll(s.transitions);
 				}
 
-				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, null, curStr, curEvent);
+				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent);
+				sparseMap.add(nextMap);
 			}
 		}
-		
-		LogProb out = new LogProb(1.0);
 
 		return findTargetProbabilityOrSumIfTargetNull(sparseMap.get(sparseMap.size()-1), trg);
 	}
@@ -192,9 +206,9 @@ class HMMState {
 			for (HMMState nextState : transitions.keySet()) {
 				if (!isLegalTransition(s, nextState, curEvent)) continue;
 				
-				if (!outMap.containsKey(nextState)) outMap.put(s, new LogProb(1.0));
+				if (!outMap.containsKey(nextState)) outMap.put(nextState, new LogProb(1.0));
 				
-				outMap.put(s, s.getEmissionProbability(curString).add(outMap.get(s)));
+				outMap.put(nextState, nextState.getEmissionProbability(curString).add(transitions.get(nextState)).add(cur.get(s)));
 			}
 		}
 		
@@ -313,6 +327,27 @@ class HMMState {
 		return null;
 	}
 	
+	public void updateChild(HMMState s, LogProb p) {
+		if (!transitions.containsKey(s)) throw new IllegalStateException();
+		
+		transitions.put(s, p);
+	}
+	
+	public void clearEmissions() {
+		emissions.clear();
+	}
+	
+	public void setEmission(String word, LogProb p) {
+		emissions.put(word, p);
+	}
+	
+	public void clearTransitions() {
+		for (HMMState s : transitions.keySet()) {
+			s.parents.remove(this);
+		}
+		transitions.clear();
+	}
+	
 	public void normalizeProbability() {
 		double sum = 0.0;
 		for (LogProb p : transitions.values()) sum += p.getActualProbability();
@@ -330,6 +365,8 @@ class HMMState {
 	}
 	public StateType getType() { return type; }
 	
+	public Map<HMMState, LogProb> getTransitions() { return transitions; }
+	
 	private static boolean isLegalTransition(HMMState start, HMMState end, TargetEvent event) {
 		if (event == TargetEvent.NO_EVENT) return (start.getType() == StateType.TARGET) == (end.getType() == StateType.TARGET);
 		
@@ -346,19 +383,47 @@ class HMMState {
 		return matching;
 	}
 	
+	public void addAllChildren(List<HMMState> list, LogProb p) {
+		for (HMMState s : list) addChild(s, p);
+	}
+
+	public void normalizeEmissions(Map<String, Double> vocabCount, double totalWords) {
+		defaultEmissionProbability = (new LogProb(1.0)).sub(new LogProb(totalWords));
+		
+		//for (String s : emissions.keySet()) {
+		//	emissions.put(s, (new LogProb(1)).add(emissions.get(s)));
+		//}
+	}
 }
 
+
+
+
+
+
+
 public class HiddenMarkovModel {
-	private HashMap<Integer, HMMState> states;
-	private int maxID;
+	private HashSet<HMMState> states;
 	HMMState start;
 	
 	private List<HMMState> backgroundStates;
 	private List<HMMState> prefixStateHeads;
 	private List<HMMState> suffixStateHeads;
-	private List<HMMState> tagetStateHeads;
+	private List<HMMState> targetStateHeads;
 	
 	public static final String PHI_TOKEN = ".~!PHI!~.";
+
+	public HiddenMarkovModel() {
+		states = new HashSet<HMMState>();
+
+		backgroundStates = new ArrayList<HMMState>();
+		prefixStateHeads = new ArrayList<HMMState>();
+		suffixStateHeads = new ArrayList<HMMState>();
+		targetStateHeads = new ArrayList<HMMState>();
+		
+		start = new HMMState(StateType.BACKGROUND);
+		addState(start);
+	}
 	
 	void lengthen(HMMState trg) {
 		HMMState newState = new HMMState(trg.getType());
@@ -386,35 +451,54 @@ public class HiddenMarkovModel {
 	}
 	//void split()
 	
-	public HiddenMarkovModel() {
-		states = new HashMap<Integer, HMMState>();
-		maxID = 0;
-	}
 	
 	public HiddenMarkovModel deepCopy() {
 		HashMap<HMMState, HMMState> thisToCopy = new HashMap<HMMState, HMMState>();
 		
 		HiddenMarkovModel out = new HiddenMarkovModel();
 		
-		out.maxID = this.maxID;
-		
-		for (HMMState s : states.values()) {
+		for (HMMState s : states) {
 			HMMState s2 = s.shallowCopy();
 			thisToCopy.put(s, s2);
 			
 			out.addState(s2);
 		}
 		
-		for (HMMState s2 : out.states.values()) {
+		for (HMMState s2 : out.states) {
 			s2.replaceTransitionReferences(thisToCopy);
 		}
 		
 		return out;
 	}
 	
-	private void normalizeProbabilities() {
-		for (HMMState s : states.values()) {
+	private void normalizeProbabilities(List<HMMTrainingDocument> trainingCorpus) {
+		normalizeTransitions();
+		
+		normalizeEmissions(trainingCorpus);
+	}
+	
+	private void normalizeTransitions() {
+		for (HMMState s : states) {
 			s.normalizeProbability();
+		}
+	}
+	
+	private void normalizeEmissions(List<HMMTrainingDocument> trainingCorpus) {
+		Map<String, Double> vocabCount = new HashMap<String, Double>();
+		
+		for (HMMTrainingDocument doc : trainingCorpus) {
+			for (List<String> sentence : doc.text) for (String word : sentence) {
+				word = word.toLowerCase();
+				if (!vocabCount.containsKey(word)) vocabCount.put(word, 0.0);
+				
+				vocabCount.put(word, vocabCount.get(word)+1);
+			}
+		}
+		double totalWords = 0;
+		for (Double d : vocabCount.values()) totalWords += d;
+		
+		for (HMMState s : states) {
+			s.normalizeEmissions(vocabCount, totalWords);
 		}
 	}
 	
@@ -426,66 +510,355 @@ public class HiddenMarkovModel {
 	//	return new LogProb(1.0);
 //	}
 	
-	//updates connections for leaves after each head node
-	public void updateLeafConnections() {
-		throw new IllegalStateException();
-	}
 	
 	public LogProb getForwardsProbabilityPartial(HMMState i, int t, List<List<String>> words, List<List<TargetEvent>> events) {
 		return start.getForwardsProbability(i, t, words, events);
 	}
 	
 	public LogProb getBackwardsProbabilityPartial(HMMState i, int t, List<List<String>> words, List<List<TargetEvent>> events) {
-		return start.getBackwardsProbability(i, t, words, events);
+		return start.getBackwardsProbability(i, states, t, words, events);
 	}
 	
-	private LogProb xi(HMMState i, HMMState j, int t, LogProb observationProb, List<List<String>> words, List<List<TargetEvent>> events) {
+	private LogProb xiDenominator(int t, List<List<String>> words, List<List<TargetEvent>> events) {
+		double sum = 0.0;
+		for (HMMState s : states) {
+			for (HMMState k : s.getTransitions().keySet()) {
+				LogProb cur = xi(s, k, t, new LogProb(1.0), words, events);
+				sum += cur.getActualProbability();
+			}
+		}
+		
+		return new LogProb(sum);
+	}
+	
+	private LogProb xi(HMMState i, HMMState j, int t, LogProb denom, List<List<String>> words, List<List<TargetEvent>> events) {
 		Map<Integer, String> flattenedIdxToString = new HashMap<Integer, String>();
 		for (List<String> sentence : words) for (String s : sentence) {
 			flattenedIdxToString.put(flattenedIdxToString.size(), s);
 		}
-		String tWord = flattenedIdxToString.get(t);
+		String wordAtJ = flattenedIdxToString.get(t+1);
 		
-		LogProb numerator = getForwardsProbabilityPartial(i, t, words, events).add(getBackwardsProbabilityPartial(j, t+1, words, events));
-		numerator = numerator.add(i.getProbabilityTo(j)).add(j.getEmissionProbability(tWord));
+		LogProb numerator = getForwardsProbabilityPartial(i, t, words, events);
+		numerator = numerator.add(getBackwardsProbabilityPartial(j, t+1, words, events));
+		numerator = numerator.add(i.getProbabilityTo(j)).add(j.getEmissionProbability(wordAtJ));
 		
-		LogProb denominator = observationProb;
-		
-		return numerator.sub(denominator);
+		return numerator.sub(denom);
 	}
 	
-	public void trainBaumWelch(List<HMMTrainingDocument> trainingDocs, List<HMMTrainingDocument> testingDocs) {
+	private class StatePair {
+		HMMState start;
+		HMMState end;
+		
+		public StatePair(HMMState a, HMMState b) {
+			start = a; end = b;
+		}
+		
+		public int hashCode() {
+			return start.hashCode() * 1024 + end.hashCode();
+		}
+		
+		public boolean equals(Object o) {
+			if (o instanceof StatePair == false) return false;
+			
+			StatePair other = (StatePair) o;
+			return start == other.start && end == other.end;
+			
+		}
+	}
+	private class StateWord {
+		HMMState start;
+		String end;
+		
+		public StateWord(HMMState a, String b) {
+			start = a; end = b;
+		}
+		
+		public int hashCode() {
+			return start.hashCode() * 1024 + end.hashCode();
+		}
+		
+		public boolean equals(Object o) {
+			if (o instanceof StateWord == false) return false;
+			
+			StateWord other = (StateWord) o;
+			return start == other.start && end == other.end;
+			
+		}
+	}
+	/*
+	private LogProb gammaDenominator(HMMState i, int t, List<List<String>> words, List<List<TargetEvent>> events) {
+		double sum = 0.0;
+		
+		for (HMMState s : states) {
+			LogProb result = getForwardsProbabilityPartial(s, t, words, events);
+			result = result.add(getBackwardsProbabilityPartial(s, t, words, events));
+			
+			sum += result.getActualProbability();
+		}
+		
+		return new LogProb(sum);
+		
+	}*/
+	private LogProb gamma(HMMState i, int t, LogProb den, List<List<String>> words, List<List<TargetEvent>> events) {
+		//return getForwardsProbabilityPartial(i, t, words, events).add(getBackwardsProbabilityPartial(i, t, words, events));
+		double sum = 0.0;
+		for (HMMState s : i.getTransitions().keySet()) {
+			sum += xi(i, s, t, den, words, events).getActualProbability();
+		}
+		return new LogProb(sum);
+	}
+	
+	
+	private void baumWelchStep(List<HMMTrainingDocument> trainingDocs, List<HMMTrainingDocument> testingDocs) {
+		normalizeTransitions();
+		
+		Map<StatePair, Double> transitionProbNumerator = new HashMap<StatePair, Double>();
+		Map<StateWord, Double> emissionProbNumerator = new HashMap<StateWord, Double>();
+
+		double commonDenominator = 0.0;
+
+		
+		for (HMMState s : states)  {
+			for (HMMState k : s.getTransitions().keySet()) {
+				transitionProbNumerator.put(new StatePair(s, k), 0.0);
+			}
+		}
+
+		Timer trainTimer = new Timer();
+		Timer parseTimer = new Timer();
+		Timer xiTimer = new Timer();
+		Timer gammaTimer = new Timer();
+		
+		Timer transitionNumTimer = new Timer();
+		Timer emissionNumTimer = new Timer();
+		Timer denTimer = new Timer();
+		
 		for (HMMTrainingDocument doc : trainingDocs) {
+			int totalSize = 0;
 			List<List<TargetEvent>> targetEvents = new ArrayList<List<TargetEvent>>();
+		
+			parseTimer.start();
 			
 			//do any parsing necessary
 			for (List<String> sentence : doc.text) {
+				totalSize += sentence.size();
+				
 				targetEvents.add(new ArrayList<TargetEvent>());
 				for (int k=0; k<sentence.size(); k++) {
 					targetEvents.get(targetEvents.size() - 1).add(TargetEvent.NO_EVENT);
 				}
 				
-				for (int k=0; k < sentence.size(); k++) {
-					List<TargetEvent> curEvents = targetEvents.get(targetEvents.size() - 1);
-					
-					boolean incorrect = k + doc.tokenizedExpectedResult.size() > sentence.size();
-					for (int j=0; j+k < doc.tokenizedExpectedResult.size() && !incorrect; j++) {
-						incorrect = !sentence.get(j+k).equals(doc.tokenizedExpectedResult.get(j));
+				for (List<String> result : doc.tokenizedExpectedResults) {
+					for (int k=0; k < sentence.size(); k++) {
+						List<TargetEvent> curEvents = targetEvents.get(targetEvents.size() - 1);
+						
+						boolean incorrect = k + result.size() >= sentence.size();
+						for (int j=0; j+k < result.size() && !incorrect; j++) {
+							incorrect = !sentence.get(j+k).equals(result.get(j));
+						}
+						
+						if (incorrect) continue;
+	
+						curEvents.set(k, TargetEvent.ENTER);
+						curEvents.set(k+result.size(), TargetEvent.EXIT);
 					}
-					
-					if (incorrect) continue;
-
-					curEvents.set(k, TargetEvent.ENTER);
-					curEvents.set(k+doc.tokenizedExpectedResult.size(), TargetEvent.EXIT);
 				}
 			}
+
+			parseTimer.pause();
 			
+			trainTimer.start();
 			//train
+			for (HMMState i : states) {
+				transitionNumTimer.start();
+				for (HMMState j : i.getTransitions().keySet()) {
+				
+					double aNum = 0.0;
+					for (int t=1; t < totalSize - 1; t++) {
+						xiTimer.start();
+						aNum += xi(i, j, t, new LogProb(1.0), doc.text, targetEvents).getActualProbability();
+						xiTimer.pause();
+					}
+					
+					StatePair key = new StatePair(i, j);
+					transitionProbNumerator.put(key, aNum + transitionProbNumerator.get(key));
+				}
+				transitionNumTimer.pause();
+
+				emissionNumTimer.start();
+				int idx = 0;
+				for (List<String> sentence : doc.text) for (String str : sentence) {
+					StateWord cur = new StateWord(i, str);
+					
+					if (!emissionProbNumerator.containsKey(cur)) emissionProbNumerator.put(cur, 0.0);
+					
+					emissionProbNumerator.put(cur, gamma(i, idx, new LogProb(1.0), doc.text, targetEvents).getActualProbability()
+											  + emissionProbNumerator.get(cur));
+					
+					idx++;
+				}
+				emissionNumTimer.pause();
+			}
 			
+			//train denominator
+			denTimer.start();
+			for (HMMState i : states) {
+				for (int t=1; t < totalSize; t++) {
+					gammaTimer.start();
+					commonDenominator += gamma(i, t, new LogProb(1.0), doc.text, targetEvents).getActualProbability();
+					gammaTimer.pause();
+				}
+			}
+			denTimer.pause();
+			trainTimer.pause();
+		}
+		
+
+		parseTimer.stopAndPrintFuncTiming("Baum-Welch parsing");
+		trainTimer.stopAndPrintFuncTiming("Baum-Welch train");
+		xiTimer.stopAndPrintFuncTiming("Baum-Welch xi step for num");
+		gammaTimer.stopAndPrintFuncTiming("Baum-Welch gamma step for den");
+		
+		transitionNumTimer.stopAndPrintFuncTiming("BW transition numerator calc");
+		emissionNumTimer.stopAndPrintFuncTiming("BW emission numerator calc");
+		denTimer.stopAndPrintFuncTiming("BW denominator calc");
+		
+		Timer updateTimer = new Timer();
+		
+		updateTimer.start();
+		
+		//update
+		for (StatePair s : transitionProbNumerator.keySet()) {
+			LogProb prob = new LogProb(transitionProbNumerator.get(s));
+			
+			s.start.updateChild(s.end, prob.sub(new LogProb(commonDenominator)));
+		}
+		for (StateWord s : emissionProbNumerator.keySet()) {
+			LogProb prob = new LogProb(emissionProbNumerator.get(s));
+			s.start.setEmission(s.end, prob.sub(new LogProb(commonDenominator)));
+		}
+		
+		updateTimer.stopAndPrintFuncTiming("Baum-Welch update");
+		
+		
+	}
+	
+	public void baumWelchOptimize(int numSteps, List<HMMTrainingDocument> trainingDocs, List<HMMTrainingDocument> testingDocs) {
+		normalizeProbabilities(trainingDocs);
+		
+		Timer t = new Timer();
+		while (true) {
+			System.out.println("Beginning training step");
+			t.start();
+			baumWelchStep(trainingDocs, testingDocs);
+			t.stopAndPrintFuncTiming("Baum-Welch Step");
+			normalizeTransitions();
 		}
 	}
 	
+	private void replaceConnection(HMMState head, boolean addSelfCycles, StateType[] endConnections) {
+		List<HMMState> path = head.getLineOfSameType();
+
+		for (int i=1; i<path.size(); i++) {
+			HMMState prev = path.get(i-1);
+			prev.clearTransitions();
+			prev.addChild(path.get(i), new LogProb(1.0));
+			if (addSelfCycles) prev.addChild(prev, new LogProb(1.0));
+		}
+		
+		HMMState tail = path.get(path.size()-1);
+		
+		tail.clearTransitions();
+		if (addSelfCycles) tail.addChild(tail, new LogProb(1.0));
+		for (StateType t : endConnections) {
+			switch (t) {
+			case PREFIX:
+				tail.addAllChildren(prefixStateHeads, new LogProb(1.0));
+				break;
+				
+			case SUFFIX:
+				tail.addAllChildren(suffixStateHeads, new LogProb(1.0));
+				break;
+				
+			case TARGET:
+				tail.addAllChildren(targetStateHeads, new LogProb(1.0));
+				break;
+				
+			case BACKGROUND:
+				tail.addAllChildren(backgroundStates, new LogProb(1.0));
+				break;
+				
+			default:
+				throw new IllegalArgumentException();
+			}
+		}
+	}
+	
+	public void replaceAllConnections() {
+		replaceConnection(start, true, new StateType[]{StateType.TARGET, StateType.PREFIX});
+		
+		for (HMMState s : prefixStateHeads) replaceConnection(s, false, new StateType[] {StateType.TARGET});
+		for (HMMState s : suffixStateHeads) replaceConnection(s, false, new StateType[] {StateType.BACKGROUND, StateType.PREFIX});
+		for (HMMState s : backgroundStates) replaceConnection(s, true, new StateType[] {StateType.PREFIX});
+		for (HMMState s : targetStateHeads) replaceConnection(s, true, new StateType[] {StateType.SUFFIX});
+		
+		this.normalizeTransitions();
+	}
+	
+	public void addHead(HMMState s) {
+		Set<HMMState> visited = new HashSet<HMMState>();
+		
+		Stack<HMMState> next = new Stack<HMMState>();
+		next.add(s);
+		
+		while (!next.isEmpty()) {
+			HMMState top = next.pop();
+			visited.add(top);
+			
+			for (HMMState n : top.getTransitions().keySet()) {
+				if (!visited.contains(n)) next.push(n);
+			}
+		}
+		
+		for (HMMState found : visited) addState(found);
+		
+		switch (s.getType()) {
+		case PREFIX:
+			prefixStateHeads.add(s);
+			break;
+			
+		case SUFFIX:
+			suffixStateHeads.add(s);
+			break;
+			
+		case TARGET:
+			targetStateHeads.add(s);
+			break;
+			
+		case BACKGROUND:
+			backgroundStates.add(s);
+			break;
+			
+		default:
+			throw new IllegalArgumentException();
+		}
+	}
+	
+	public static HiddenMarkovModel generateBasicModel() {
+		HiddenMarkovModel out = new HiddenMarkovModel();
+		
+		out.addHead(new HMMState(StateType.PREFIX));
+		out.addHead(new HMMState(StateType.SUFFIX));
+		out.addHead(new HMMState(StateType.BACKGROUND));
+		out.addHead(new HMMState(StateType.TARGET));
+
+		out.replaceAllConnections();
+		
+		return out;		
+	}
+	
+	
 	private void addState(HMMState s) {
-		states.put(maxID++, s);
+		states.add(s);
 	}
 }

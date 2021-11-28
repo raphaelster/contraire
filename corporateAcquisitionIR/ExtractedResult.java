@@ -97,4 +97,39 @@ public class ExtractedResult {
 									keyProperties.get(3).get(0), keyProperties.get(4).get(0), keyProperties.get(5),
 									keyProperties.get(6), keyProperties.get(7).get(0));
 	}
+	
+	private List<String> toList(String s) {
+		List<String> out = new ArrayList<String>();
+		
+		if (s != null) out.add(s);
+		
+		return out;
+	}
+	
+	public List<String> getFromField(ResultField f) {
+		switch (f) {
+		//case TEXT:
+		//	return toList(text);
+		case ACQUIRED_BUSINESS:
+			return toList(acquiredBusiness);
+		case ACQUIRED_LOCATION:
+			return toList(acquiredLocation);
+		case DOLLAR_AMOUNT:
+			return toList(dollarAmount);
+		case STATUS:
+			return toList(status);
+		case ACQUIRED:
+			return acquired;
+		case PURCHASERS:
+			return purchasers;
+		case SELLERS:
+			return sellers;
+		default:
+			throw new IllegalArgumentException();
+		}
+	}
+	
+	public static boolean fieldIsSingular(ResultField f) {
+		return f == ResultField.ACQUIRED || f == ResultField.PURCHASERS || f == ResultField.SELLERS;
+	}
 }

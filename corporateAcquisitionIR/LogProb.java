@@ -26,4 +26,8 @@ public class LogProb {
 		
 		return out;
 	}
+	
+	public String toString() {
+		return "2^" + String.format("%.2f", value);
+	}
 }

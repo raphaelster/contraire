@@ -1,0 +1,12 @@
+package corporateAcquisitionIR;
+
+enum ResultField {
+	//TEXT,
+	ACQUIRED_BUSINESS,
+	ACQUIRED_LOCATION,
+	DOLLAR_AMOUNT,
+	STATUS,
+	ACQUIRED,
+	PURCHASERS,
+	SELLERS
+}
