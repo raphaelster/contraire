@@ -14,11 +14,32 @@ import edu.stanford.nlp.ie.AbstractSequenceClassifier;
 import edu.stanford.nlp.ie.crf.CRFClassifier;
 import edu.stanford.nlp.ling.CoreLabel;
 import edu.stanford.nlp.ling.HasWord;
+import edu.stanford.nlp.ling.TaggedWord;
 import edu.stanford.nlp.parser.nndep.DependencyParser;
 import edu.stanford.nlp.tagger.maxent.MaxentTagger;
 
 
 public class Train {
+	public static List<List<CoreLabel>> nerAugment(List<List<TaggedWord>> posFile, AbstractSequenceClassifier<CoreLabel> classifier) {
+		List<List<CoreLabel>> out = new ArrayList<List<CoreLabel>>();
+
+		for (List<TaggedWord> sentence : posFile) {
+			out.add(classifier.classifySentence(sentence));
+		}
+		
+		return out;
+	}
+	public static List<List<TaggedWord>> tagAugment(List<List<HasWord>> tokenizedFile, MaxentTagger tagger) {
+		List<List<TaggedWord>> out = new ArrayList<List<TaggedWord>>();
+
+		for (List<HasWord> sentence : tokenizedFile) {
+			out.add(tagger.tagSentence(sentence));
+		}
+		
+		return out;
+	}
+	
+	
 	public static double score(HiddenMarkovModel model, List<String> tokenizedDoc, ExtractedResult expected, ResultField f, boolean verbose) {
 		Set<String> results = model.extract(tokenizedDoc, ExtractedResult.fieldIsSingular(f));
 		
@@ -61,7 +82,15 @@ public class Train {
 		
 		if (Double.isNaN(fScore)) fScore = 0;
 		
+		if (results.size() > 5) {
+			System.out.print("");
+		}
+		
+		
 		if (verbose) System.out.println(" F score is "+fScore+", precision = "+precision+" and recall = "+recall);
+		if (fScore > 0 && verbose) {
+			System.out.println("A hit!");
+		}
 		return fScore;
 		
 	}
@@ -86,7 +115,16 @@ public class Train {
 	public static void main(String[] args) {
 
 		List<List<String>> trainFilepathList;
-		MaxentTagger tagger;
+		MaxentTagger tagger = new MaxentTagger("lib/tagger/english-left3words-distsim.tagger");
+		AbstractSequenceClassifier<CoreLabel> classifier;
+		
+		try {
+			classifier = CRFClassifier.getClassifier("lib/classifier/english.muc.7class.distsim.crf.ser.gz");
+			
+		} catch (Exception e) {
+			System.out.println("Failed to load NER classifier:\n"+e.getMessage());
+			return;
+		}
 		
 		
 		
@@ -115,6 +153,24 @@ public class Train {
 		
 		Function<List<List<String>>, List<List<String>>> tokenize = (s) -> {
 			List<List<HasWord>> hwList = MaxentTagger.tokenizeText(new ListListReader(s));
+			
+			List<List<String>> out = new ArrayList<List<String>>();
+			
+			for (List<HasWord> l : hwList) {
+				out.add(new ArrayList<String>());
+				for (HasWord h : l) {
+					out.get(out.size()-1).add(h.toString());
+				}
+			}
+			
+			return out;
+		};
+		
+		Function<List<List<String>>, List<List<String>>> tokenizeAugment = (s) -> {
+			List<List<HasWord>> hwList = MaxentTagger.tokenizeText(new ListListReader(s));
+			
+			List<List<TaggedWord>> tagged = tagAugment(hwList, tagger);
+			List<List<CoreLabel>> ner = nerAugment(tagged, classifier);
 			
 			List<List<String>> out = new ArrayList<List<String>>();
 			

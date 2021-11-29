@@ -981,13 +981,6 @@ public class HiddenMarkovModel {
 				totalWordsFound++;
 			}
 		}
-		for (HMMTrainingDocument d : testingDocs) {
-			for (List<String> sentence : d.text) for (String s : sentence) {
-				uniqueWordSet.add(s.toLowerCase());
-				totalWordsFound++;
-			}
-		}
-		
 		totalUniqueWords = uniqueWordSet.size();
 		
 		this.smoothAllEmissions(totalUniqueWords, totalWordsFound);
