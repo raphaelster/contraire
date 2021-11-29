@@ -128,13 +128,15 @@ class HMMState {
 		//(emission(s) + addedValue) / (totalProbability + addedValue*vocabSize)
 		// addedValue*vocabSize = 1, when addedValue = 1/vocabSize
 		
-		double addedValue = 1.0 / totalUniqueWords;
 		double totalProbability = 0.0;
 		
 		
 		for (LogProb p : emissions.values()) totalProbability += p.getActualProbability();
 		
-		LogProb den = new LogProb(totalProbability + 1);
+
+		double addedValue = totalProbability / totalWords / 10.0 / (totalUniqueWords);
+		
+		LogProb den = new LogProb(totalProbability + addedValue * totalUniqueWords);
 
 		defaultEmissionProbability = new LogProb(addedValue).sub(den);
 		
@@ -185,7 +187,9 @@ class HMMState {
 				
 					LogProb prob = prior.get(before).prob;
 					
-					prob.add(before.getProbabilityTo(after)).add(after.getEmissionProbability(word));
+					LogProb transProb = before.getProbabilityTo(after);
+					LogProb emissionProb = after.getEmissionProbability(word);
+					prob.add(transProb).add(emissionProb);
 					
 					if (prob.getValue() >= best.prob.getValue()) {
 						best = new ProbBackPointer(prob, prior.get(before).backPointers, after);
@@ -263,10 +267,6 @@ class HMMState {
 					transitions.get(s).putAll(s.transitions);
 				}
 				
-				if (i == 19 && curStr.equals("issuance")) {
-					System.out.println("");
-				}
-
 				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent, false);
 				
 				if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(nextMap); 
@@ -997,8 +997,8 @@ public class HiddenMarkovModel {
 		
 	}
 	
-	public void baumWelchOptimize(int numSteps, List<HMMTrainingDocument> trainingDocs, List<HMMTrainingDocument> testingDocs, boolean printTiming) {
-		normalizeProbabilities(trainingDocs);
+	public void baumWelchOptimize(int numSteps, List<HMMTrainingDocument> trainingDocs, List<HMMTrainingDocument> testingDocs, boolean clear, boolean printTiming) {
+		if (clear) normalizeProbabilities(trainingDocs);
 		
 		Timer t = new Timer();
 		for (int i=0; i < numSteps; i++) {
@@ -1054,7 +1054,7 @@ public class HiddenMarkovModel {
 	}
 	
 	public void replaceAllConnections() {
-		replaceConnection(start, true, new StateType[]{StateType.TARGET, StateType.PREFIX});
+		replaceConnection(start, true, new StateType[]{StateType.TARGET, StateType.PREFIX, StateType.BACKGROUND});
 		replaceConnection(retargetSuffix, false, new StateType[] {StateType.TARGET, StateType.PREFIX});
 		
 		for (HMMState s : prefixStateHeads) replaceConnection(s, false, new StateType[] {StateType.TARGET});
@@ -1132,20 +1132,56 @@ public class HiddenMarkovModel {
 		states.add(s);
 	}
 	
-	public List<String> extract(List<String> doc) {
-		List<HMMState> path = start.getOptimalSequence(doc);
+	private String concatenateExtraction(List<String> tokens) {
+		if (tokens.size() == 0) return "";
 		
-		for (HMMState s : path) {
-			//do_stuff();
-		}
+		String out = "";
 		
-		return new ArrayList<String>();
+		for (String s : tokens) out += s + " ";
+		return out.substring(0, out.length()-1);
 	}
 	
-	public List<List<String>> extractAll(List<List<List<String>>> corpus) {
-		List<List<String>> out = new ArrayList<List<String>>();
+	public Set<String> extract(List<String> doc, boolean extractSingle) {
+		List<HMMState> path = start.getOptimalSequence(doc);
+		
+		Set<String> allCapturedTokens = new HashSet<String>();
+		
+		boolean capturing = false;
+		List<String> capturedTokens = new ArrayList<String>();
+		
+		for (int i=0; i<path.size(); i++) {
+			capturing = path.get(i).getType() == StateType.TARGET;
+			
+			if (capturing) {
+				capturedTokens.add(doc.get(i));
+			}
+			else {
+				allCapturedTokens.add(concatenateExtraction(capturedTokens));
+				capturedTokens.clear();
+			}
+				
+		}
+		
+		if (capturing) allCapturedTokens.add(concatenateExtraction(capturedTokens));
+		allCapturedTokens.remove("");
+		
+		if (extractSingle) {
+			Set<String> out = new HashSet<String>();
+			for (String s : allCapturedTokens) {
+				out.add(s);
+				break;
+			}
+			
+			return out;
+		}
+		
+		return allCapturedTokens;
+	}
+	
+	public List<Set<String>> extractAll(List<List<List<String>>> corpus, boolean extractSingle) {
+		List<Set<String>> out = new ArrayList<Set<String>>();
 		for (List<List<String>> doc : corpus) {
-			out.add(extract(Utility.flatten(doc)));
+			out.add(extract(Utility.flatten(doc), extractSingle));
 		}
 		return out;
 	}

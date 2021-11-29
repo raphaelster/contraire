@@ -130,6 +130,6 @@ public class ExtractedResult {
 	}
 	
 	public static boolean fieldIsSingular(ResultField f) {
-		return f == ResultField.ACQUIRED || f == ResultField.PURCHASERS || f == ResultField.SELLERS;
+		return !(f == ResultField.ACQUIRED || f == ResultField.PURCHASERS || f == ResultField.SELLERS);
 	}
 }

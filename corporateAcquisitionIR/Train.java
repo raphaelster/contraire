@@ -5,7 +5,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectOutputStream;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Function;
 
 import edu.stanford.nlp.ie.AbstractSequenceClassifier;
@@ -17,6 +19,70 @@ import edu.stanford.nlp.tagger.maxent.MaxentTagger;
 
 
 public class Train {
+	public static double score(HiddenMarkovModel model, List<String> tokenizedDoc, ExtractedResult expected, ResultField f, boolean verbose) {
+		Set<String> results = model.extract(tokenizedDoc, ExtractedResult.fieldIsSingular(f));
+		
+		Set<String> expectedResults = new HashSet<String>();
+		
+		
+		for (String s : expected.getFromField(f)) {
+			expectedResults.add(s);
+		}
+		
+		double totalExpected = expectedResults.size();
+		double totalActual   = results.size();
+		
+		
+		double totalGuesses = results.size();
+		double totalCorrect = 0.0;
+		for (String guess : results) if (expectedResults.contains(guess)) totalCorrect++;
+
+		if (verbose) {
+			System.out.println(" Testing model on doc:\n");
+			for (String s : tokenizedDoc) System.out.print(s+" ");
+			System.out.println();
+			System.out.println(" Expected "+totalExpected+" results, got "+totalActual+" results. ");
+		}
+		
+		
+		if (totalExpected == 0 && totalActual == 0) {
+			if (verbose) System.out.println(" F score is 1.0 (correctly didn't identify)");
+			return 1.0;
+		}
+		if (totalActual == 0 ^ totalExpected == 0) {
+			if (verbose) System.out.println(" F score is 0.0 (one set is empty, other isn't)");
+			return 0.0;
+		}
+		
+		double precision = totalCorrect / totalGuesses;
+		double recall    = totalCorrect / expectedResults.size();
+		
+		double fScore = 2.0 * (precision * recall) / (precision + recall);
+		
+		if (Double.isNaN(fScore)) fScore = 0;
+		
+		if (verbose) System.out.println(" F score is "+fScore+", precision = "+precision+" and recall = "+recall);
+		return fScore;
+		
+	}
+	
+	public static double scoreAll(HiddenMarkovModel model, List<List<List<String>>> trainingCorpus, List<ExtractedResult> expectedResults, ResultField f, boolean verbose) {
+		
+		double totalFScore = 0.0;
+		for (int i=0; i<trainingCorpus.size(); i++) {
+			List<String> trainingInstance = Utility.flatten(trainingCorpus.get(i));
+			ExtractedResult expected = expectedResults.get(i);
+			
+			double fScore = score(model, trainingInstance, expected, f, verbose);
+			
+			totalFScore += fScore;
+			
+		}
+		
+		if (verbose) System.out.println("Total F score: "+totalFScore);
+		return totalFScore;
+	}
+	
 	public static void main(String[] args) {
 
 		List<List<String>> trainFilepathList;
@@ -106,9 +172,11 @@ public class Train {
 			List<HMMTrainingDocument> train = allHMMTrainingFiles.subList(0, halfSize);
 			List<HMMTrainingDocument> test = allHMMTrainingFiles.subList(halfSize, size);
 			if (!tried && f == ResultField.ACQUIRED) {
-				basic.extract(Utility.flatten(test.get(0).text));
-				basic.baumWelchOptimize(10, train, test, true);
-				basic.extract(Utility.flatten(test.get(0).text));
+				//basic.extract(Utility.flatten(test.get(0).text), ExtractedResult.fieldIsSingular(f));
+				scoreAll(basic, allTrainingFiles.subList(halfSize, size), allKeyFiles.subList(halfSize, size), f, true);
+				basic.baumWelchOptimize(10, train, test, true, true);
+				scoreAll(basic, allTrainingFiles.subList(halfSize, size), allKeyFiles.subList(halfSize, size), f, true);
+				//basic.extract(Utility.flatten(test.get(0).text), ExtractedResult.fieldIsSingular(f));
 			}
 		}
 		
