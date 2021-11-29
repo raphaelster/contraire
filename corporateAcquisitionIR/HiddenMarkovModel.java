@@ -673,34 +673,22 @@ public class HiddenMarkovModel {
 		}
 	}
 	
-	private XiTable getXiTable(List<List<String>> words, List<List<TargetEvent>> events,
+	//technically, this can be parallelized
+	private XiTable getXiTable(List<String> words, 
 							   HMMState.ProbabilityTable forwards, HMMState.ProbabilityTable backwards) {
 		
 
 		Map<StatePair, Map<Integer, LogProb>> results = new HashMap<StatePair, Map<Integer, LogProb>>();
 		
 		
-		int totalSize = 0;
-		for (List<String> sentence : words) totalSize += sentence.size();
 		
 		
 		for (HMMState i : states) {
 			for (HMMState j : i.getTransitions().keySet()) {
 				StatePair pair = new StatePair(i, j);
-				for (int t=0; t < totalSize; t++) {
+				for (int t=0; t < words.size(); t++) {
 
-					String wordAtJ = "";
-					int totalIdx = 0;
-					
-					outer_loop:
-					for (int a=0; a<words.size(); a++) for (int b=0; b<words.get(a).size(); b++) {
-						if (totalIdx == t) {
-							wordAtJ = words.get(a).get(b);
-							break outer_loop;
-						}
-						
-						totalIdx++;
-					}
+					String wordAtJ = words.get(t);
 					
 					LogProb numerator = forwards.find(i,  t);
 					numerator = numerator.add(backwards.find(j, t+1));
@@ -799,7 +787,7 @@ public class HiddenMarkovModel {
 		return new LogProb(sum);
 		
 	}*/
-	private LogProb gamma(HMMState i, int t, LogProb den, List<List<String>> words, List<List<TargetEvent>> events,
+	private LogProb gamma(HMMState i, int t, LogProb den, List<List<String>> words, 
 						  HMMState.ProbabilityTable forwards, HMMState.ProbabilityTable backwards, XiTable xiTable) {
 		//return getForwardsProbabilityPartial(i, t, words, events).add(getBackwardsProbabilityPartial(i, t, words, events));
 		double sum = 0.0;
@@ -837,7 +825,7 @@ public class HiddenMarkovModel {
 	
 	
 	
-	private void baumWelchStep(List<HMMTrainingDocument> trainingDocs, List<HMMTrainingDocument> testingDocs) {
+	private void baumWelchStep(List<HMMTrainingDocument> trainingDocs, List<HMMTrainingDocument> testingDocs, boolean printTiming) {
 		normalizeTransitions();
 		
 		Map<StatePair, Double> transitionProbNumerator = new HashMap<StatePair, Double>();
@@ -868,6 +856,7 @@ public class HiddenMarkovModel {
 			List<List<TargetEvent>> targetEvents = new ArrayList<List<TargetEvent>>();
 		
 			parseTimer.start();
+			List<String> flattenedDoc = Utility.flatten(doc.text);
 			
 			//do any parsing necessary
 			for (List<String> sentence : doc.text) {
@@ -899,7 +888,7 @@ public class HiddenMarkovModel {
 			tableTimer.start();
 			HMMState.ProbabilityTable forwardsTable  = this.getForwardsProbabilityTable(doc.text, targetEvents);
 			HMMState.ProbabilityTable backwardsTable = this.getBackwardsProbabilityTable(doc.text, targetEvents);
-			XiTable xiTable = this.getXiTable(doc.text, targetEvents, forwardsTable, backwardsTable);
+			XiTable xiTable = this.getXiTable(flattenedDoc, forwardsTable, backwardsTable);
 			tableTimer.pause();
 			
 			trainTimer.start();
@@ -931,7 +920,7 @@ public class HiddenMarkovModel {
 					Map<String, Double> iWordProbs = emissionProbNumerator.get(i);
 					if (!iWordProbs.containsKey(str)) iWordProbs.put(str, 0.0);
 					
-					iWordProbs.put(str, gamma(i, idx, new LogProb(1.0), doc.text, targetEvents, forwardsTable, backwardsTable, xiTable).getActualProbability()
+					iWordProbs.put(str, gamma(i, idx, new LogProb(1.0), doc.text, forwardsTable, backwardsTable, xiTable).getActualProbability()
 									    + iWordProbs.get(str));
 					
 					idx++;
@@ -944,7 +933,7 @@ public class HiddenMarkovModel {
 			for (HMMState i : states) {
 				for (int t=1; t < totalSize; t++) {
 					gammaTimer.start();
-					commonDenominator += gamma(i, t, new LogProb(1.0), doc.text, targetEvents, forwardsTable, backwardsTable, xiTable).getActualProbability();
+					commonDenominator += gamma(i, t, new LogProb(1.0), doc.text, forwardsTable, backwardsTable, xiTable).getActualProbability();
 					gammaTimer.pause();
 				}
 			}
@@ -953,19 +942,20 @@ public class HiddenMarkovModel {
 		}
 		
 
-		parseTimer.stopAndPrintFuncTiming("Baum-Welch parsing");
-		
-		tableTimer.stopAndPrintFuncTiming("Calculating lookup tables (forwardsProb, backwardsProb, xi)");
-		
-		xiTimer.stopAndPrintFuncTiming("Baum-Welch xi step for num");
-		gammaTimer.stopAndPrintFuncTiming("Baum-Welch gamma step for den");
-		
-		transitionNumTimer.stopAndPrintFuncTiming("BW transition numerator calc");
-		emissionNumTimer.stopAndPrintFuncTiming("BW emission numerator calc");
-		
-		denTimer.stopAndPrintFuncTiming("BW denominator calc");
-		trainTimer.stopAndPrintFuncTiming("Baum-Welch train");
-		
+		if (printTiming) {
+			parseTimer.stopAndPrintFuncTiming("Baum-Welch parsing");
+			
+			tableTimer.stopAndPrintFuncTiming("Calculating lookup tables (forwardsProb, backwardsProb, xi)");
+			
+			xiTimer.stopAndPrintFuncTiming("Baum-Welch xi step for num");
+			gammaTimer.stopAndPrintFuncTiming("Baum-Welch gamma step for den");
+			
+			transitionNumTimer.stopAndPrintFuncTiming("BW transition numerator calc");
+			emissionNumTimer.stopAndPrintFuncTiming("BW emission numerator calc");
+			
+			denTimer.stopAndPrintFuncTiming("BW denominator calc");
+			trainTimer.stopAndPrintFuncTiming("Baum-Welch train");
+		}
 		
 		Timer updateTimer = new Timer();
 		
@@ -984,20 +974,20 @@ public class HiddenMarkovModel {
 			}
 		}
 		
-		updateTimer.stopAndPrintFuncTiming("Baum-Welch update");
+		if (printTiming) updateTimer.stopAndPrintFuncTiming("Baum-Welch update");
 		
 		
 	}
 	
-	public void baumWelchOptimize(int numSteps, List<HMMTrainingDocument> trainingDocs, List<HMMTrainingDocument> testingDocs) {
+	public void baumWelchOptimize(int numSteps, List<HMMTrainingDocument> trainingDocs, List<HMMTrainingDocument> testingDocs, boolean printTiming) {
 		normalizeProbabilities(trainingDocs);
 		
 		Timer t = new Timer();
 		while (true) {
 			System.out.println("Beginning training step");
 			t.start();
-			baumWelchStep(trainingDocs, testingDocs);
-			t.stopAndPrintFuncTiming("Full Baum-Welch Step");
+			baumWelchStep(trainingDocs, testingDocs, printTiming);
+			if (printTiming) t.stopAndPrintFuncTiming("Full Baum-Welch Step");
 			normalizeTransitions();
 		}
 	}

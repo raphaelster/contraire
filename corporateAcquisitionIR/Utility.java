@@ -58,4 +58,12 @@ public class Utility {
 		
 		return out;
 	}
+	
+	static public <T> List<T> flatten(List<List<T>> list) {
+		List<T> out = new ArrayList<T>();
+		
+		for (List<T> line : list) out.addAll(line);
+		
+		return out;
+	}
 }
