@@ -110,6 +110,124 @@ class HMMState {
 		return result;
 	}
 	
+	public class ProbabilityTable {
+		private List<Map<HMMState, LogProb>> table;
+		
+		public ProbabilityTable(List<Map<HMMState, LogProb>> t) {
+			table = t;
+		}
+		
+		public LogProb find(HMMState trg, int t) {
+			return HMMState.findTargetProbabilityOrSumIfTargetNull(table.get(t), trg);
+		}
+	}
+	
+	public List<HMMState> getOptimalSequence(List<List<String>> doc, List<List<TargetEvent>> events) {
+		
+		
+		
+		List<HMMState> out = null;
+		//follow back pointers
+		return out;
+	}
+
+	public ProbabilityTable getForwardsProbabilityTable(List<List<String>> doc, List<List<TargetEvent>> events) {
+		List<Map<HMMState, LogProb>> sparseMap = new ArrayList<Map<HMMState, LogProb>>();
+		
+		//if (doc.size() == 0) return new LogProb(1);
+		if (doc.size() == 0) return new ProbabilityTable(sparseMap);
+		
+		int totalWordsToProcess = 0;
+		
+		for (List<String> s : doc) totalWordsToProcess += s.size();
+		
+		
+		Map<HMMState, LogProb> startNode = new HashMap<HMMState, LogProb>();
+		startNode.put(this, this.getEmissionProbability(doc.get(0).get(0)));
+		sparseMap.add(startNode);
+	
+		int wordsProcessed = 1;
+		
+		search_loop:
+		for (int sIdx=0; sIdx < doc.size(); sIdx++) {
+			List<String> sequence = doc.get(sIdx);
+			
+			int firstIdx = (sIdx == 0 ? 1 : 0);
+			
+			for (int i=firstIdx; i<sequence.size(); i++) {
+				if (wordsProcessed == totalWordsToProcess) break search_loop;
+				wordsProcessed++;
+				
+				String curStr = sequence.get(i);
+				TargetEvent curEvent = events.get(sIdx).get(i);
+				
+				Map<HMMState, LogProb> top = sparseMap.get(sparseMap.size() - 1);
+				
+				Map<HMMState, Map<HMMState, LogProb>> transitions = new HashMap<HMMState, Map<HMMState, LogProb>>();
+				
+				for (HMMState s : top.keySet()) {
+					transitions.put(s, new HashMap<HMMState, LogProb>());
+					transitions.get(s).putAll(s.transitions);
+				}
+
+				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent);
+				sparseMap.add(nextMap);
+			}
+		}
+
+		return new ProbabilityTable(sparseMap);
+		//return findTargetProbabilityOrSumIfTargetNull(sparseMap.get(sparseMap.size()-1), trg);
+	}
+	
+
+	public ProbabilityTable getBackwardsProbabilityTable(Set<HMMState> allStates, List<List<String>> doc, List<List<TargetEvent>> events) {
+		List<Map<HMMState, LogProb>> sparseMap = new ArrayList<Map<HMMState, LogProb>>();
+		
+		int stopAtIthWord = -1;
+		
+		if (doc.size() == 0) return new ProbabilityTable(sparseMap);
+		
+		
+		Map<HMMState, LogProb> startNode = new HashMap<HMMState, LogProb>();
+		for (HMMState s : allStates) startNode.put(s, new LogProb(1.0));
+		sparseMap.add(startNode);
+	
+		int totalSize = 0;
+		for (List<String> sentence : doc) totalSize += sentence.size();
+		
+		final int LAST_WORD = totalSize - stopAtIthWord;
+		
+		int wordsProcessed = 1;
+		
+		search_loop:
+		for (int sIdx=doc.size()-1; sIdx >= 0; sIdx--) {
+			List<String> sequence = doc.get(sIdx);
+			
+			for (int i=sequence.size()-1; i>=0; i--) {
+				if (wordsProcessed == LAST_WORD) break search_loop;
+				wordsProcessed++;
+				
+				String curStr = sequence.get(i);
+				TargetEvent curEvent = events.get(sIdx).get(i);
+				
+				Map<HMMState, LogProb> top = sparseMap.get(sparseMap.size() - 1);
+				
+				Map<HMMState, Map<HMMState, LogProb>> transitions = new HashMap<HMMState, Map<HMMState, LogProb>>();
+				
+				for (HMMState s : top.keySet()) {
+					transitions.put(s, new HashMap<HMMState, LogProb>());
+					transitions.get(s).putAll(s.transitions);
+				}
+
+				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent);
+				sparseMap.add(nextMap);
+			}
+		}
+
+		return new ProbabilityTable(sparseMap);
+	}
+	
+	/*
 	public LogProb getForwardsProbability(HMMState trg, int totalWordsToProcess, List<List<String>> doc, List<List<TargetEvent>> events) {
 		List<Map<HMMState, LogProb>> sparseMap = new ArrayList<Map<HMMState, LogProb>>();
 		
@@ -195,7 +313,7 @@ class HMMState {
 		}
 
 		return findTargetProbabilityOrSumIfTargetNull(sparseMap.get(sparseMap.size()-1), trg);
-	}
+	}*/
 	
 	private static Map<HMMState, LogProb> directionalProbabilityStep(Map<HMMState, LogProb> cur, Map<HMMState, Map<HMMState, LogProb>> allTransitions, 
 																	 String curString, TargetEvent curEvent) {
@@ -502,23 +620,33 @@ public class HiddenMarkovModel {
 		}
 	}
 	
-	public LogProb getForwardsProbability(List<List<String>> words, List<List<TargetEvent>> events) {
+	/*public LogProb getForwardsProbability(List<List<String>> words, List<List<TargetEvent>> events) {
 		return getForwardsProbabilityPartial(null, -1, words, events);
-	}
+	}*/
 	
 	//public LogProb getBackwardsProbability(List<List<String>> words, List<List<TargetEvent>> events) {
 	//	return new LogProb(1.0);
 //	}
 	
+	public HMMState.ProbabilityTable getForwardsProbabilityTable(List<List<String>> words, List<List<TargetEvent>> events) {
+		return start.getForwardsProbabilityTable(words, events);
+	}
 	
-	public LogProb getForwardsProbabilityPartial(HMMState i, int t, List<List<String>> words, List<List<TargetEvent>> events) {
+
+	public HMMState.ProbabilityTable getBackwardsProbabilityTable(List<List<String>> words, List<List<TargetEvent>> events) {
+		return start.getBackwardsProbabilityTable(states, words, events);
+	}
+	
+	
+	/*public LogProb getForwardsProbabilityPartial(HMMState i, int t, List<List<String>> words, List<List<TargetEvent>> events) {
 		return start.getForwardsProbability(i, t, words, events);
 	}
 	
 	public LogProb getBackwardsProbabilityPartial(HMMState i, int t, List<List<String>> words, List<List<TargetEvent>> events) {
 		return start.getBackwardsProbability(i, states, t, words, events);
-	}
+	}*/
 	
+	/*
 	private LogProb xiDenominator(int t, List<List<String>> words, List<List<TargetEvent>> events) {
 		double sum = 0.0;
 		for (HMMState s : states) {
@@ -529,9 +657,10 @@ public class HiddenMarkovModel {
 		}
 		
 		return new LogProb(sum);
-	}
+	}*/
 	
-	private LogProb xi(HMMState i, HMMState j, int t, LogProb denom, List<List<String>> words, List<List<TargetEvent>> events) {
+	private LogProb xi( HMMState i, HMMState j, int t, LogProb denom, List<List<String>> words, List<List<TargetEvent>> events,
+						HMMState.ProbabilityTable forwards, HMMState.ProbabilityTable backwards) {
 		/*Map<Integer, String> flattenedIdxToString = new HashMap<Integer, String>();
 		for (List<String> sentence : words) for (String s : sentence) {
 			flattenedIdxToString.put(flattenedIdxToString.size(), s);
@@ -551,9 +680,10 @@ public class HiddenMarkovModel {
 			totalIdx++;
 		}
 		
-		
-		LogProb numerator = getForwardsProbabilityPartial(i, t, words, events);
-		numerator = numerator.add(getBackwardsProbabilityPartial(j, t+1, words, events));
+		LogProb numerator = forwards.find(i,  t);
+		numerator = numerator.add(backwards.find(j, t+1));
+		//LogProb numerator = getForwardsProbabilityPartial(i, t, words, events);
+		//numerator = numerator.add(getBackwardsProbabilityPartial(j, t+1, words, events));
 		numerator = numerator.add(i.getProbabilityTo(j)).add(j.getEmissionProbability(wordAtJ));
 		
 		return numerator.sub(denom);
@@ -613,11 +743,12 @@ public class HiddenMarkovModel {
 		return new LogProb(sum);
 		
 	}*/
-	private LogProb gamma(HMMState i, int t, LogProb den, List<List<String>> words, List<List<TargetEvent>> events) {
+	private LogProb gamma(HMMState i, int t, LogProb den, List<List<String>> words, List<List<TargetEvent>> events,
+						  HMMState.ProbabilityTable forwards, HMMState.ProbabilityTable backwards) {
 		//return getForwardsProbabilityPartial(i, t, words, events).add(getBackwardsProbabilityPartial(i, t, words, events));
 		double sum = 0.0;
 		for (HMMState s : i.getTransitions().keySet()) {
-			sum += xi(i, s, t, den, words, events).getActualProbability();
+			sum += xi(i, s, t, den, words, events, forwards, backwards).getActualProbability();
 		}
 		return new LogProb(sum);
 	}
@@ -634,6 +765,7 @@ public class HiddenMarkovModel {
 		//Map<>
 	}
 	
+	/*
 	private LogProb xiMemoize(XiGammaMemoizeContainer c, HMMState i, HMMState j, int t, List<List<String>> words, List<List<TargetEvent>> events) {
 		return xi(i, j, t, new LogProb(1.0), words, events);
 	}
@@ -644,7 +776,7 @@ public class HiddenMarkovModel {
 			sum += xiMemoize(c, i, s, t, words, events).getActualProbability();
 		}
 		return new LogProb(sum);
-	}
+	}*/
 	
 	
 	
@@ -671,6 +803,8 @@ public class HiddenMarkovModel {
 		Timer transitionNumTimer = new Timer();
 		Timer emissionNumTimer = new Timer();
 		Timer denTimer = new Timer();
+		
+		Timer tableTimer = new Timer();
 		
 		for (HMMTrainingDocument doc : trainingDocs) {
 			int totalSize = 0;
@@ -703,8 +837,12 @@ public class HiddenMarkovModel {
 					}
 				}
 			}
-
 			parseTimer.pause();
+			
+			tableTimer.start();
+			HMMState.ProbabilityTable forwardsTable  = this.getForwardsProbabilityTable(doc.text, targetEvents);
+			HMMState.ProbabilityTable backwardsTable = this.getBackwardsProbabilityTable(doc.text, targetEvents);
+			tableTimer.pause();
 			
 			trainTimer.start();
 			//train
@@ -715,7 +853,7 @@ public class HiddenMarkovModel {
 					double aNum = 0.0;
 					for (int t=1; t < totalSize - 1; t++) {
 						xiTimer.start();
-						aNum += xi(i, j, t, new LogProb(1.0), doc.text, targetEvents).getActualProbability();
+						aNum += xi(i, j, t, new LogProb(1.0), doc.text, targetEvents, forwardsTable, backwardsTable).getActualProbability();
 						xiTimer.pause();
 					}
 					
@@ -726,12 +864,13 @@ public class HiddenMarkovModel {
 
 				emissionNumTimer.start();
 				int idx = 0;
+				///todo: this can be parallelized pretty easily, just a mapping
 				for (List<String> sentence : doc.text) for (String str : sentence) {
 					StateWord cur = new StateWord(i, str);
 					
 					if (!emissionProbNumerator.containsKey(cur)) emissionProbNumerator.put(cur, 0.0);
 					
-					emissionProbNumerator.put(cur, gamma(i, idx, new LogProb(1.0), doc.text, targetEvents).getActualProbability()
+					emissionProbNumerator.put(cur, gamma(i, idx, new LogProb(1.0), doc.text, targetEvents, forwardsTable, backwardsTable).getActualProbability()
 											  + emissionProbNumerator.get(cur));
 					
 					idx++;
@@ -744,7 +883,7 @@ public class HiddenMarkovModel {
 			for (HMMState i : states) {
 				for (int t=1; t < totalSize; t++) {
 					gammaTimer.start();
-					commonDenominator += gamma(i, t, new LogProb(1.0), doc.text, targetEvents).getActualProbability();
+					commonDenominator += gamma(i, t, new LogProb(1.0), doc.text, targetEvents, forwardsTable, backwardsTable).getActualProbability();
 					gammaTimer.pause();
 				}
 			}
@@ -761,6 +900,8 @@ public class HiddenMarkovModel {
 		transitionNumTimer.stopAndPrintFuncTiming("BW transition numerator calc");
 		emissionNumTimer.stopAndPrintFuncTiming("BW emission numerator calc");
 		denTimer.stopAndPrintFuncTiming("BW denominator calc");
+		
+		tableTimer.stopAndPrintFuncTiming("Calculating tables for xi, gamma");
 		
 		Timer updateTimer = new Timer();
 		
