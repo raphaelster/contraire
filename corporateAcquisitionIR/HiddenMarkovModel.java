@@ -784,7 +784,7 @@ public class HiddenMarkovModel {
 		normalizeTransitions();
 		
 		Map<StatePair, Double> transitionProbNumerator = new HashMap<StatePair, Double>();
-		Map<StateWord, Double> emissionProbNumerator = new HashMap<StateWord, Double>();
+		Map<HMMState, Map<String, Double>> emissionProbNumerator = new HashMap<HMMState, Map<String, Double>>();
 
 		double commonDenominator = 0.0;
 
@@ -866,12 +866,14 @@ public class HiddenMarkovModel {
 				int idx = 0;
 				///todo: this can be parallelized pretty easily, just a mapping
 				for (List<String> sentence : doc.text) for (String str : sentence) {
-					StateWord cur = new StateWord(i, str);
 					
-					if (!emissionProbNumerator.containsKey(cur)) emissionProbNumerator.put(cur, 0.0);
+					if (!emissionProbNumerator.containsKey(i)) emissionProbNumerator.put(i,  new HashMap<String, Double>());
 					
-					emissionProbNumerator.put(cur, gamma(i, idx, new LogProb(1.0), doc.text, targetEvents, forwardsTable, backwardsTable).getActualProbability()
-											  + emissionProbNumerator.get(cur));
+					Map<String, Double> iWordProbs = emissionProbNumerator.get(i);
+					if (!iWordProbs.containsKey(str)) iWordProbs.put(str, 0.0);
+					
+					iWordProbs.put(str, gamma(i, idx, new LogProb(1.0), doc.text, targetEvents, forwardsTable, backwardsTable).getActualProbability()
+									    + iWordProbs.get(str));
 					
 					idx++;
 				}
@@ -913,9 +915,11 @@ public class HiddenMarkovModel {
 			
 			s.start.updateChild(s.end, prob.sub(new LogProb(commonDenominator)));
 		}
-		for (StateWord s : emissionProbNumerator.keySet()) {
-			LogProb prob = new LogProb(emissionProbNumerator.get(s));
-			s.start.setEmission(s.end, prob.sub(new LogProb(commonDenominator)));
+		for (HMMState state : emissionProbNumerator.keySet()) {
+			for (String word : emissionProbNumerator.get(state).keySet()) {
+				LogProb prob = new LogProb(emissionProbNumerator.get(state).get(word));
+				state.setEmission(word, prob.sub(new LogProb(commonDenominator)));	
+			}
 		}
 		
 		updateTimer.stopAndPrintFuncTiming("Baum-Welch update");
