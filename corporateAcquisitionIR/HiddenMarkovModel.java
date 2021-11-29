@@ -1,5 +1,6 @@
 package corporateAcquisitionIR;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -11,7 +12,8 @@ enum StateType {
 	PREFIX,
 	SUFFIX,
 	TARGET,
-	BACKGROUND
+	BACKGROUND,
+	PHI
 }
 enum TargetEvent {
 	ENTER,
@@ -57,6 +59,9 @@ class HMMState {
 		case BACKGROUND:
 			out += "BACK";
 			break;
+		case PHI:
+			out += "PHI";
+			break;
 		}
 		
 		return out;
@@ -88,6 +93,10 @@ class HMMState {
 	
 	public LogProb getEmissionProbability(String word) {
 		if (IGNORE_CASE) word = word.toLowerCase();
+		
+		if (word.equals(HiddenMarkovModel.PHI_TOKEN) && this.type != StateType.PHI) {
+			return new LogProb(0);
+		}
 		
 		if (emissions.containsKey(word)) return emissions.get(word);
 		return defaultEmissionProbability;
@@ -177,6 +186,18 @@ class HMMState {
 		return best.backPointers;
 	}
 
+	private static void renormalizeColumn(Map<HMMState, LogProb> col) {
+		double sum = 0.0;
+		for (LogProb l : col.values()) {
+			sum += l.getActualProbability();
+		}
+		LogProb factor = new LogProb(sum);
+
+		for (HMMState s : col.keySet()) {
+			col.put(s, col.get(s).sub(factor));
+		}
+	}
+	
 	public ProbabilityTable getForwardsProbabilityTable(List<List<String>> doc, List<List<TargetEvent>> events) {
 		List<Map<HMMState, LogProb>> sparseMap = new ArrayList<Map<HMMState, LogProb>>();
 		
@@ -215,8 +236,14 @@ class HMMState {
 					transitions.get(s).putAll(s.transitions);
 				}
 
-				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent);
+				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent, false);
+				
+				if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(nextMap); 
+					
 				sparseMap.add(nextMap);
+				
+
+				
 			}
 		}
 
@@ -227,7 +254,7 @@ class HMMState {
 	public ProbabilityTable getBackwardsProbabilityTable(Set<HMMState> allStates, List<List<String>> doc, List<List<TargetEvent>> events) {
 		List<Map<HMMState, LogProb>> sparseMap = new ArrayList<Map<HMMState, LogProb>>();
 		
-		int stopAtIthWord = -1;
+		int stopAtIthWord = 0;
 		
 		if (doc.size() == 0) return new ProbabilityTable(sparseMap);
 		
@@ -241,7 +268,7 @@ class HMMState {
 		
 		final int LAST_WORD = totalSize - stopAtIthWord;
 		
-		int wordsProcessed = 1;
+		int wordsProcessed = 0;
 		
 		search_loop:
 		for (int sIdx=doc.size()-1; sIdx >= 0; sIdx--) {
@@ -260,25 +287,35 @@ class HMMState {
 				
 				for (HMMState s : top.keySet()) {
 					transitions.put(s, new HashMap<HMMState, LogProb>());
-					transitions.get(s).putAll(s.transitions);
+					for (HMMState parent : s.parents) {
+						transitions.get(s).put(parent, parent.transitions.get(s));
+					}
 				}
 
-				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent);
+				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent, true);
+
+				if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(nextMap);
+				
 				sparseMap.add(nextMap);
 			}
 		}
+		
+		Collections.reverse(sparseMap);
 
 		return new ProbabilityTable(sparseMap);
 	}
 	
 	private static Map<HMMState, LogProb> directionalProbabilityStep(Map<HMMState, LogProb> cur, Map<HMMState, Map<HMMState, LogProb>> allTransitions, 
-																	 String curString, TargetEvent curEvent) {
+																	 String curString, TargetEvent curEvent, boolean flipTransitionLegality) {
 		Map<HMMState, LogProb> outMap = new HashMap<HMMState, LogProb>();
 		
 		for (HMMState s : cur.keySet()) {
 			Map<HMMState, LogProb> transitions = allTransitions.get(s);
 			for (HMMState nextState : transitions.keySet()) {
-				if (!isLegalTransition(s, nextState, curEvent)) continue;
+				boolean illegal = !isLegalTransition(s, nextState, curEvent);
+				if (flipTransitionLegality) illegal = !isLegalTransition(nextState, s, curEvent);
+				
+				if (illegal) continue;
 				
 				if (!outMap.containsKey(nextState)) outMap.put(nextState, new LogProb(1.0));
 				
@@ -487,6 +524,7 @@ public class HiddenMarkovModel {
 	private List<HMMState> targetStateHeads;
 	
 	public static final String PHI_TOKEN = ".~!phi!~.";
+	public static final boolean RENORMALIZE = true;
 
 	public HiddenMarkovModel() {
 		states = new HashSet<HMMState>();
@@ -496,7 +534,7 @@ public class HiddenMarkovModel {
 		suffixStateHeads = new ArrayList<HMMState>();
 		targetStateHeads = new ArrayList<HMMState>();
 		
-		start = new HMMState(StateType.BACKGROUND);
+		start = new HMMState(StateType.PHI);
 		addState(start);
 	}
 	
@@ -591,10 +629,14 @@ public class HiddenMarkovModel {
 		
 		public XiTable(Map<StatePair, Map<Integer, LogProb>> t) {
 			table = t;
+			
 		}
 		
 		LogProb find(HMMState i, HMMState j, int t) {
 			StatePair p = new StatePair(i, j);
+			
+			//implicitly storing 0s to make debugging easier
+			if (table.get(p) == null || table.get(p).get(t) == null) return new LogProb(0);
 			
 			return table.get(p).get(t);
 		}
@@ -619,9 +661,9 @@ public class HiddenMarkovModel {
 					
 					LogProb numerator = forwards.find(i,  t);
 					numerator = numerator.add(backwards.find(j, t+1));
-					//LogProb numerator = getForwardsProbabilityPartial(i, t, words, events);
-					//numerator = numerator.add(getBackwardsProbabilityPartial(j, t+1, words, events));
 					numerator = numerator.add(i.getProbabilityTo(j)).add(j.getEmissionProbability(wordAtJ));
+					
+					if (numerator.getActualProbability() == 0.0) continue;
 					
 					results.putIfAbsent(pair, new HashMap<Integer, LogProb>());
 					results.get(pair).put(t, numerator);
@@ -942,6 +984,9 @@ public class HiddenMarkovModel {
 				tail.addAllChildren(backgroundStates, new LogProb(1.0));
 				break;
 				
+			case PHI:
+				break;
+				
 			default:
 				throw new IllegalArgumentException();
 			}
@@ -991,6 +1036,9 @@ public class HiddenMarkovModel {
 			
 		case BACKGROUND:
 			backgroundStates.add(s);
+			break;
+			
+		case PHI:
 			break;
 			
 		default:
