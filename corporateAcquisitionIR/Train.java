@@ -47,19 +47,29 @@ public class Train {
 		List<List<List<String>>> allTrainingFiles = new ArrayList<List<List<String>>>();
 		List<ExtractedResult> allKeyFiles = new ArrayList<ExtractedResult>();
 		
-		Function<String, List<String>> tokenize = (s) -> {
-			List<List<String>> list = new ArrayList<List<String>>();
-			list.add(new ArrayList<String>());
-			list.get(0).add(s);
-			List<List<HasWord>> hwList = MaxentTagger.tokenizeText(new ListListReader(list));
+		Function<List<List<String>>, List<List<String>>> tokenize = (s) -> {
+			List<List<HasWord>> hwList = MaxentTagger.tokenizeText(new ListListReader(s));
 			
-			List<String> out = new ArrayList<String>();
+			List<List<String>> out = new ArrayList<List<String>>();
 			
-			for (List<HasWord> l : hwList) for (HasWord h : l) {
-				out.add(h.toString());
+			for (List<HasWord> l : hwList) {
+				out.add(new ArrayList<String>());
+				for (HasWord h : l) {
+					out.get(out.size()-1).add(h.toString());
+				}
 			}
 			
 			return out;
+		};
+		
+		Function<String, List<String>> tokenizeSingle = (s) -> {
+			List<List<String>> list = new ArrayList<List<String>>();
+			list.add(new ArrayList<String>());
+			list.get(0).add(s);
+			
+			List<List<String>> full = tokenize.apply(list);
+			
+			return Utility.flatten(full);
 		};
 		
 		try {
@@ -88,14 +98,18 @@ public class Train {
 		
 		boolean tried = false;
 		for (ResultField f : ResultField.values()) {
-			List<HMMTrainingDocument> allHMMTrainingFiles = HMMTrainingDocument.makeFromCorpusForField(allTrainingFiles, allKeyFiles, f, tokenize);
+			List<HMMTrainingDocument> allHMMTrainingFiles = HMMTrainingDocument.makeFromCorpusForField(allTrainingFiles, allKeyFiles, f, tokenizeSingle, tokenize);
 			
 			int size = allHMMTrainingFiles.size();
 			int halfSize = size/2;
 			
 			List<HMMTrainingDocument> train = allHMMTrainingFiles.subList(0, halfSize);
 			List<HMMTrainingDocument> test = allHMMTrainingFiles.subList(halfSize, size);
-			if (!tried) basic.baumWelchOptimize(50, train, test);
+			if (!tried && f == ResultField.ACQUIRED) {
+				basic.extract(Utility.flatten(test.get(0).text));
+				basic.baumWelchOptimize(10, train, test, true);
+				basic.extract(Utility.flatten(test.get(0).text));
+			}
 		}
 		
 		
