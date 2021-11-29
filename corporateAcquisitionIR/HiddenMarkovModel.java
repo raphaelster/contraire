@@ -659,13 +659,69 @@ public class HiddenMarkovModel {
 		return new LogProb(sum);
 	}*/
 	
+	private class XiTable {
+		private Map<StatePair, Map<Integer, LogProb>> table;
+		
+		public XiTable(Map<StatePair, Map<Integer, LogProb>> t) {
+			table = t;
+		}
+		
+		LogProb find(HMMState i, HMMState j, int t) {
+			StatePair p = new StatePair(i, j);
+			
+			return table.get(p).get(t);
+		}
+	}
+	
+	private XiTable getXiTable(List<List<String>> words, List<List<TargetEvent>> events,
+							   HMMState.ProbabilityTable forwards, HMMState.ProbabilityTable backwards) {
+		
+
+		Map<StatePair, Map<Integer, LogProb>> results = new HashMap<StatePair, Map<Integer, LogProb>>();
+		
+		
+		int totalSize = 0;
+		for (List<String> sentence : words) totalSize += sentence.size();
+		
+		
+		for (HMMState i : states) {
+			for (HMMState j : i.getTransitions().keySet()) {
+				StatePair pair = new StatePair(i, j);
+				for (int t=0; t < totalSize; t++) {
+
+					String wordAtJ = "";
+					int totalIdx = 0;
+					
+					outer_loop:
+					for (int a=0; a<words.size(); a++) for (int b=0; b<words.get(a).size(); b++) {
+						if (totalIdx == t) {
+							wordAtJ = words.get(a).get(b);
+							break outer_loop;
+						}
+						
+						totalIdx++;
+					}
+					
+					LogProb numerator = forwards.find(i,  t);
+					numerator = numerator.add(backwards.find(j, t+1));
+					//LogProb numerator = getForwardsProbabilityPartial(i, t, words, events);
+					//numerator = numerator.add(getBackwardsProbabilityPartial(j, t+1, words, events));
+					numerator = numerator.add(i.getProbabilityTo(j)).add(j.getEmissionProbability(wordAtJ));
+					
+					results.putIfAbsent(pair, new HashMap<Integer, LogProb>());
+					results.get(pair).put(t, numerator);
+				}
+			}
+		}
+		
+		
+		
+		return new XiTable(results);
+	}
+	/*
 	private LogProb xi( HMMState i, HMMState j, int t, LogProb denom, List<List<String>> words, List<List<TargetEvent>> events,
 						HMMState.ProbabilityTable forwards, HMMState.ProbabilityTable backwards) {
-		/*Map<Integer, String> flattenedIdxToString = new HashMap<Integer, String>();
-		for (List<String> sentence : words) for (String s : sentence) {
-			flattenedIdxToString.put(flattenedIdxToString.size(), s);
-		}
-		String wordAtJ = flattenedIdxToString.get(t+1);*/
+		
 		
 		String wordAtJ = "";
 		int totalIdx = 0;
@@ -687,7 +743,7 @@ public class HiddenMarkovModel {
 		numerator = numerator.add(i.getProbabilityTo(j)).add(j.getEmissionProbability(wordAtJ));
 		
 		return numerator.sub(denom);
-	}
+	}*/
 	
 	private class StatePair {
 		HMMState start;
@@ -744,11 +800,12 @@ public class HiddenMarkovModel {
 		
 	}*/
 	private LogProb gamma(HMMState i, int t, LogProb den, List<List<String>> words, List<List<TargetEvent>> events,
-						  HMMState.ProbabilityTable forwards, HMMState.ProbabilityTable backwards) {
+						  HMMState.ProbabilityTable forwards, HMMState.ProbabilityTable backwards, XiTable xiTable) {
 		//return getForwardsProbabilityPartial(i, t, words, events).add(getBackwardsProbabilityPartial(i, t, words, events));
 		double sum = 0.0;
 		for (HMMState s : i.getTransitions().keySet()) {
-			sum += xi(i, s, t, den, words, events, forwards, backwards).getActualProbability();
+			sum += xiTable.find(i, s, t).getActualProbability();
+			//sum += xi(i, s, t, den, words, events, forwards, backwards).getActualProbability();
 		}
 		return new LogProb(sum);
 	}
@@ -842,6 +899,7 @@ public class HiddenMarkovModel {
 			tableTimer.start();
 			HMMState.ProbabilityTable forwardsTable  = this.getForwardsProbabilityTable(doc.text, targetEvents);
 			HMMState.ProbabilityTable backwardsTable = this.getBackwardsProbabilityTable(doc.text, targetEvents);
+			XiTable xiTable = this.getXiTable(doc.text, targetEvents, forwardsTable, backwardsTable);
 			tableTimer.pause();
 			
 			trainTimer.start();
@@ -853,7 +911,8 @@ public class HiddenMarkovModel {
 					double aNum = 0.0;
 					for (int t=1; t < totalSize - 1; t++) {
 						xiTimer.start();
-						aNum += xi(i, j, t, new LogProb(1.0), doc.text, targetEvents, forwardsTable, backwardsTable).getActualProbability();
+						aNum += xiTable.find(i, j, t).getActualProbability();
+						//aNum += xi(i, j, t, new LogProb(1.0), doc.text, targetEvents, forwardsTable, backwardsTable).getActualProbability();
 						xiTimer.pause();
 					}
 					
@@ -864,7 +923,7 @@ public class HiddenMarkovModel {
 
 				emissionNumTimer.start();
 				int idx = 0;
-				///todo: this can be parallelized pretty easily, just a mapping
+
 				for (List<String> sentence : doc.text) for (String str : sentence) {
 					
 					if (!emissionProbNumerator.containsKey(i)) emissionProbNumerator.put(i,  new HashMap<String, Double>());
@@ -872,7 +931,7 @@ public class HiddenMarkovModel {
 					Map<String, Double> iWordProbs = emissionProbNumerator.get(i);
 					if (!iWordProbs.containsKey(str)) iWordProbs.put(str, 0.0);
 					
-					iWordProbs.put(str, gamma(i, idx, new LogProb(1.0), doc.text, targetEvents, forwardsTable, backwardsTable).getActualProbability()
+					iWordProbs.put(str, gamma(i, idx, new LogProb(1.0), doc.text, targetEvents, forwardsTable, backwardsTable, xiTable).getActualProbability()
 									    + iWordProbs.get(str));
 					
 					idx++;
@@ -885,7 +944,7 @@ public class HiddenMarkovModel {
 			for (HMMState i : states) {
 				for (int t=1; t < totalSize; t++) {
 					gammaTimer.start();
-					commonDenominator += gamma(i, t, new LogProb(1.0), doc.text, targetEvents, forwardsTable, backwardsTable).getActualProbability();
+					commonDenominator += gamma(i, t, new LogProb(1.0), doc.text, targetEvents, forwardsTable, backwardsTable, xiTable).getActualProbability();
 					gammaTimer.pause();
 				}
 			}
@@ -895,15 +954,18 @@ public class HiddenMarkovModel {
 		
 
 		parseTimer.stopAndPrintFuncTiming("Baum-Welch parsing");
-		trainTimer.stopAndPrintFuncTiming("Baum-Welch train");
+		
+		tableTimer.stopAndPrintFuncTiming("Calculating lookup tables (forwardsProb, backwardsProb, xi)");
+		
 		xiTimer.stopAndPrintFuncTiming("Baum-Welch xi step for num");
 		gammaTimer.stopAndPrintFuncTiming("Baum-Welch gamma step for den");
 		
 		transitionNumTimer.stopAndPrintFuncTiming("BW transition numerator calc");
 		emissionNumTimer.stopAndPrintFuncTiming("BW emission numerator calc");
-		denTimer.stopAndPrintFuncTiming("BW denominator calc");
 		
-		tableTimer.stopAndPrintFuncTiming("Calculating tables for xi, gamma");
+		denTimer.stopAndPrintFuncTiming("BW denominator calc");
+		trainTimer.stopAndPrintFuncTiming("Baum-Welch train");
+		
 		
 		Timer updateTimer = new Timer();
 		
@@ -935,7 +997,7 @@ public class HiddenMarkovModel {
 			System.out.println("Beginning training step");
 			t.start();
 			baumWelchStep(trainingDocs, testingDocs);
-			t.stopAndPrintFuncTiming("Baum-Welch Step");
+			t.stopAndPrintFuncTiming("Full Baum-Welch Step");
 			normalizeTransitions();
 		}
 	}
