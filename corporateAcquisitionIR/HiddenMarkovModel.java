@@ -532,11 +532,25 @@ public class HiddenMarkovModel {
 	}
 	
 	private LogProb xi(HMMState i, HMMState j, int t, LogProb denom, List<List<String>> words, List<List<TargetEvent>> events) {
-		Map<Integer, String> flattenedIdxToString = new HashMap<Integer, String>();
+		/*Map<Integer, String> flattenedIdxToString = new HashMap<Integer, String>();
 		for (List<String> sentence : words) for (String s : sentence) {
 			flattenedIdxToString.put(flattenedIdxToString.size(), s);
 		}
-		String wordAtJ = flattenedIdxToString.get(t+1);
+		String wordAtJ = flattenedIdxToString.get(t+1);*/
+		
+		String wordAtJ = "";
+		int totalIdx = 0;
+		
+		outer_loop:
+		for (int a=0; a<words.size(); a++) for (int b=0; b<words.get(a).size(); b++) {
+			if (totalIdx == t) {
+				wordAtJ = words.get(a).get(b);
+				break outer_loop;
+			}
+			
+			totalIdx++;
+		}
+		
 		
 		LogProb numerator = getForwardsProbabilityPartial(i, t, words, events);
 		numerator = numerator.add(getBackwardsProbabilityPartial(j, t+1, words, events));
@@ -607,6 +621,31 @@ public class HiddenMarkovModel {
 		}
 		return new LogProb(sum);
 	}
+	
+	private class XiInput {
+		HMMState i;
+		HMMState j;
+		int t;
+		List<List<String>> words;
+		List<List<TargetEvent>> events;
+	}
+	
+	private class XiGammaMemoizeContainer {
+		//Map<>
+	}
+	
+	private LogProb xiMemoize(XiGammaMemoizeContainer c, HMMState i, HMMState j, int t, List<List<String>> words, List<List<TargetEvent>> events) {
+		return xi(i, j, t, new LogProb(1.0), words, events);
+	}
+	
+	private LogProb gammaMemoize(XiGammaMemoizeContainer c, HMMState i, int t, List<List<String>> words, List<List<TargetEvent>> events) {
+		double sum = 0.0;
+		for (HMMState s : i.getTransitions().keySet()) {
+			sum += xiMemoize(c, i, s, t, words, events).getActualProbability();
+		}
+		return new LogProb(sum);
+	}
+	
 	
 	
 	private void baumWelchStep(List<HMMTrainingDocument> trainingDocs, List<HMMTrainingDocument> testingDocs) {
