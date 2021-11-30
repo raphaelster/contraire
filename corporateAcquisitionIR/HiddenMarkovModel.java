@@ -22,9 +22,17 @@ enum TargetEvent {
 	NO_EVENT
 }
 
+class StateHierarchy {
+	public StateHierarchy parent;
+	public Set<StateHierarchy> children;
+	public HMMState value;
+	
+	
+}
+
 
 class HMMState {
-	private static final boolean IGNORE_CASE = false;
+	static final boolean IGNORE_CASE = false;
 	private static int maxID = 0;
 	
 	private HashMap<HMMState, LogProb> transitions;
@@ -39,7 +47,7 @@ class HMMState {
 		transitions = new HashMap<HMMState, LogProb>();
 		emissions = new HashMap<String, LogProb>();
 		parents = new HashSet<HMMState>();
-		defaultEmissionProbability = new LogProb(0);
+		defaultEmissionProbability = new LogProb(1.0);
 		type = t;
 		id = maxID++;
 	}
@@ -124,26 +132,85 @@ class HMMState {
 		}
 	}
 	
+	void smoothTransitions() {
+		double addVal = Math.pow(10, -50);
+		double v = transitions.size();
+		
+		
+		double totalProb = 0.0;
+		for (LogProb p : transitions.values()) totalProb += p.getActualProbability();
+			
+		for (HMMState s : transitions.keySet()) {
+			double prob = transitions.get(s).getActualProbability() + addVal;
+			prob /= totalProb + addVal*v;
+			transitions.put(s, new LogProb(prob));
+		}
+	}
+	
 	void smoothEmissions(double totalUniqueWords, double totalWords) {
 		//(emission(s) + addedValue) / (totalProbability + addedValue*vocabSize)
 		// addedValue*vocabSize = 1, when addedValue = 1/vocabSize
+
+		Set<String> keysToRemove = new HashSet<String>();
+
+		for (String s : emissions.keySet()) {
+			if (emissions.get(s).getValue() < -300) {
+				LogProb p = emissions.get(s);
+				keysToRemove.add(s);
+			}
+		}
+		
+		for (String s : keysToRemove) emissions.remove(s);
 		
 		double totalProbability = 0.0;
+		double minProbability = 1.0;
+		
+		double zeroWords = totalUniqueWords - emissions.size();
 		
 		
-		for (LogProb p : emissions.values()) totalProbability += p.getActualProbability();
+		for (LogProb p : emissions.values()) {
+			
+			totalProbability += p.getActualProbability();
+		}
 		
+		LogProb totalProbLog = new LogProb(totalProbability);
+		for (String s : emissions.keySet()) {
+			emissions.put(s, emissions.get(s).sub(totalProbLog));
+			minProbability = Math.min(minProbability, emissions.get(s).getActualProbability());
+			if (minProbability == 0.00) {
+				LogProb p = emissions.get(s);
+				System.out.print("");;
+			}
+		}
+		totalProbability = 1.0;
 
-		double addedValue = totalProbability / totalWords / 10.0 / (totalUniqueWords);
+		if (zeroWords < 0.001) {
+			defaultEmissionProbability = new LogProb(minProbability/2.0);
+		}
 		
-		LogProb den = new LogProb(totalProbability + addedValue * totalUniqueWords);
-
-		defaultEmissionProbability = new LogProb(addedValue).sub(den);
+		double discount = minProbability / 4.0;
 		
 		for (String s : emissions.keySet()) {
+			double newProb = (emissions.get(s).getActualProbability() - discount) / totalProbability;
+			emissions.put(s, new LogProb(newProb));
+		}
+		double defaultProb = (discount * (totalUniqueWords - zeroWords)) / zeroWords;
+		defaultEmissionProbability = new LogProb(defaultProb);
+		
+		if (!Double.isFinite(defaultEmissionProbability.getValue())) {
+			throw new IllegalArgumentException("Default probability is meant to be nonzero");
+		}
+		/*
+		//double addedValue = totalProbability / totalWords / 10.0 / (totalUniqueWords);
+		
+		//LogProb den = new LogProb(totalProbability + addedValue * totalUniqueWords);
+
+		//defaultEmissionProbability = new LogProb(addedValue).sub(den);
+		
+		//for (String s : emissions.keySet()) {
 			LogProb num = new LogProb(emissions.get(s).getActualProbability() + addedValue);
 			emissions.put(s,  num.sub(den));
-		}
+		}*/
 		
 	}
 	
@@ -190,8 +257,10 @@ class HMMState {
 					LogProb transProb = before.getProbabilityTo(after);
 					LogProb emissionProb = after.getEmissionProbability(word);
 					prob.add(transProb).add(emissionProb);
+					int bestID = Integer.MAX_VALUE;	//use ID as tiebreaker, since the hash map ordering is actually random
+					if (best.backPointers.size() > 0) bestID = best.backPointers.get(best.backPointers.size()-1).id;
 					
-					if (prob.getValue() >= best.prob.getValue()) {
+					if (prob.getValue() >= best.prob.getValue() && (prob.getValue() != best.prob.getValue() || after.id < bestID)) {
 						best = new ProbBackPointer(prob, prior.get(before).backPointers, after);
 					}
 					
@@ -269,7 +338,10 @@ class HMMState {
 				
 				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent, false);
 				
-				if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(nextMap); 
+				if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(nextMap);
+				for (LogProb p  : nextMap.values()) if (Double.isNaN(p.getActualProbability())) {
+					throw new IllegalStateException();
+				}
 					
 				sparseMap.add(nextMap);
 				
@@ -499,6 +571,7 @@ class HMMState {
 	}
 	
 	public void setEmission(String word, LogProb p) {
+		if (IGNORE_CASE) word = word.toLowerCase();
 		emissions.put(word, p);
 	}
 	
@@ -659,7 +732,7 @@ public class HiddenMarkovModel {
 		
 		for (HMMTrainingDocument doc : trainingCorpus) {
 			for (List<String> sentence : doc.text) for (String word : sentence) {
-				word = word.toLowerCase();
+				if (HMMState.IGNORE_CASE) word = word.toLowerCase();
 				if (!vocabCount.containsKey(word)) vocabCount.put(word, 0.0);
 				
 				vocabCount.put(word, vocabCount.get(word)+1);
@@ -977,7 +1050,8 @@ public class HiddenMarkovModel {
 		
 		for (HMMTrainingDocument d : trainingDocs) {
 			for (List<String> sentence : d.text) for (String s : sentence) {
-				uniqueWordSet.add(s.toLowerCase());
+				if (HMMState.IGNORE_CASE) s = s.toLowerCase();
+				uniqueWordSet.add(s);
 				totalWordsFound++;
 			}
 		}
@@ -999,10 +1073,15 @@ public class HiddenMarkovModel {
 			t.start();
 			baumWelchStep(trainingDocs, testingDocs, printTiming);
 			if (printTiming) t.stopAndPrintFuncTiming("Full Baum-Welch Step");
+			smoothTransitions();
 			normalizeTransitions();
 		}
 	}
 	
+	private void smoothTransitions() {
+		for (HMMState s : states) s.smoothTransitions();
+	}
+
 	private void replaceConnection(HMMState head, boolean addSelfCycles, StateType[] typesThatTailConnectsTo) {
 		List<HMMState> path = head.getLineOfSameType();
 
