@@ -18,6 +18,12 @@ public class LogProb {
 		
 		return out;
 	}
+	
+	public static LogProb makeFromExponent(double exp) {
+		LogProb out = new LogProb(0.0);
+		out.value = exp;
+		return out;
+	}
 
 	public LogProb sub(LogProb other) {
 		LogProb out = new LogProb(1.0);

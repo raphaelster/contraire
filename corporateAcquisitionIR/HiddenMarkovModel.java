@@ -371,7 +371,7 @@ class HMMState {
 	}
 	
 	void smoothTransitions() {
-		double addVal = Math.pow(10, -50);
+		/*double addVal = Math.pow(10, -50);
 		double v = transitions.size();
 		
 		
@@ -382,20 +382,21 @@ class HMMState {
 			double prob = transitions.get(s).getActualProbability() + addVal;
 			prob /= totalProb + addVal*v;
 			transitions.put(s, new LogProb(prob));
-		}
+		}*/
 	}
 	
 	void smoothEmissions(double totalUniqueWords, double totalWords) {
 		//(emission(s) + addedValue) / (totalProbability + addedValue*vocabSize)
 		// addedValue*vocabSize = 1, when addedValue = 1/vocabSize
 		hierarchyNode.invalidateCache();
+
+		double MIN_EMISSION_VAL = -20000;
 		
 		Set<String> keysToRemove = new HashSet<String>();
 
 		for (String s : emissions.keySet()) {
-			if (emissions.get(s).getValue() < -800) {
-				LogProb p = emissions.get(s);
-				keysToRemove.add(s);
+			if (emissions.get(s).getValue() < MIN_EMISSION_VAL || Double.isNaN(emissions.get(s).getValue())) {
+				emissions.put(s, LogProb.makeFromExponent(MIN_EMISSION_VAL));
 			}
 		}
 		
@@ -407,53 +408,13 @@ class HMMState {
 			return;
 		}
 		
-		double totalProbability = 0.0;
-		double minProbability = 1.0;
+		//double totalProbability = 0.0;
+		//double minProbability = Double.NEGATIVE_INFINITY;
+		//double emissionSum = 0.0;
+		//for (LogProb p : emissions.values()) emissionSum += p.getActualProbability();
 		
-		double zeroWords = totalUniqueWords - emissions.size();
+		defaultEmissionProbability = LogProb.makeFromExponent(MIN_EMISSION_VAL);
 		
-		
-		for (LogProb p : emissions.values()) {
-			
-			totalProbability += p.getActualProbability();
-		}
-		
-		LogProb totalProbLog = new LogProb(totalProbability);
-		for (String s : emissions.keySet()) {
-			emissions.put(s, emissions.get(s).sub(totalProbLog));
-			minProbability = Math.min(minProbability, emissions.get(s).getActualProbability());
-		}
-		totalProbability = 1.0;
-
-		if (zeroWords < 0.001) {
-			defaultEmissionProbability = new LogProb(minProbability/2.0);
-		}
-		
-		double discount = minProbability / 4.0;
-		
-		for (String s : emissions.keySet()) {
-			double newProb = (emissions.get(s).getActualProbability() - discount) / totalProbability;
-			emissions.put(s, new LogProb(newProb));
-		}
-		double defaultProb = (discount * (totalUniqueWords - zeroWords)) / zeroWords;
-		defaultEmissionProbability = new LogProb(defaultProb);
-		
-		if (!Double.isFinite(defaultEmissionProbability.getValue())) {
-			System.out.println("Error; default probability = 0");
-			defaultEmissionProbability = new LogProb(Math.pow(10, -200));
-			//throw new IllegalArgumentException("Default probability is meant to be nonzero");
-		}
-		/*
-		//double addedValue = totalProbability / totalWords / 10.0 / (totalUniqueWords);
-		
-		//LogProb den = new LogProb(totalProbability + addedValue * totalUniqueWords);
-
-		//defaultEmissionProbability = new LogProb(addedValue).sub(den);
-		
-		//for (String s : emissions.keySet()) {
-			LogProb num = new LogProb(emissions.get(s).getActualProbability() + addedValue);
-			emissions.put(s,  num.sub(den));
-		}*/
 		
 	}
 	
@@ -544,7 +505,7 @@ class HMMState {
 			
 			sum += prob;
 		}
-		LogProb factor = new LogProb(sum); 
+		LogProb factor = new LogProb(sum).add(max); 
 		
 		//hacky fix for underflow
 		if (Double.isInfinite(factor.getValue())) {
