@@ -85,10 +85,11 @@ public class Train {
 			System.out.println(" Expected "+totalExpected+" results, got "+totalActual+" results. ");
 		}
 		
+		double correctlyNotIdentifyScore = 0.001;
 		
 		if (totalExpected == 0 && totalActual == 0) {
-			if (verbose) System.out.println(" F score is 1.0 (correctly didn't identify)");
-			return new Score(1.0, 0.0, 1.0, 0.0);
+			if (verbose) System.out.println(" F score is "+correctlyNotIdentifyScore+" (correctly didn't identify)");
+			return new Score(correctlyNotIdentifyScore, 0.0, 1.0, 0.0);
 		}
 		if (totalActual == 0 ^ totalExpected == 0) {
 			if (verbose) System.out.println(" F score is 0.0 (one set is empty, other isn't)");
@@ -243,6 +244,13 @@ public class Train {
 		Map<ResultField, Double> prevScores = new HashMap<ResultField, Double>();
 		Map<ResultField, Double> postScores = new HashMap<ResultField, Double>();
 		
+		HiddenMarkovModel profileHMM = HiddenMarkovModel.generateBasicModel();
+
+		{
+			List<HMMTrainingDocument> profileTraining = HMMTrainingDocument.makeFromCorpusForField(convertedCorpus, allKeyFiles, ResultField.ACQUIRED, tokenizeSingle);
+
+			profileHMM.baumWelchOptimize(10, profileTraining, profileTraining, true, true);
+		}
 		
 		for (ResultField f : ResultField.values()) {
 			List<HMMTrainingDocument> allHMMTrainingFiles = HMMTrainingDocument.makeFromCorpusForField(convertedCorpus, allKeyFiles, f, tokenizeSingle);

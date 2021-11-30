@@ -234,6 +234,7 @@ class StateHierarchy {
 
 class HMMState {
 	static final boolean IGNORE_CASE = false;
+	static final boolean IGNORE_HIERARCHY = true;
 	private static int maxID = 0;
 	
 	private HashMap<HMMState, LogProb> transitions;
@@ -287,6 +288,8 @@ class HMMState {
 		return out;
 	}
 	
+	public Set<HMMState> getParents() { return parents; }
+	
 	class Extraction {
 		public List<HMMState> path;
 		public LogProb chance;
@@ -327,13 +330,14 @@ class HMMState {
 	}
 	
 	public LogProb getEmissionProbability(String word, double totalUniqueWords, boolean ignoreHierarchy) {
-		if (IGNORE_CASE) word = word.toLowerCase();
+		if (HMMState.IGNORE_HIERARCHY) ignoreHierarchy = true;
+		if (HMMState.IGNORE_CASE) word = word.toLowerCase();
 		
 
 		if (!ignoreHierarchy) return hierarchyNode.getProbability(word, totalUniqueWords);
 		
 		if (word.equals(HiddenMarkovModel.PHI_TOKEN) && this.type != StateType.PHI) {
-			return new LogProb(0);
+			return new LogProb(Math.pow(10, -300));
 		}
 		
 		LogProb baseEmissionProb = null;
@@ -389,13 +393,19 @@ class HMMState {
 		Set<String> keysToRemove = new HashSet<String>();
 
 		for (String s : emissions.keySet()) {
-			if (emissions.get(s).getValue() < -300) {
+			if (emissions.get(s).getValue() < -400) {
 				LogProb p = emissions.get(s);
 				keysToRemove.add(s);
 			}
 		}
 		
+		
 		for (String s : keysToRemove) emissions.remove(s);
+
+		if (emissions.size() == 0) {
+			defaultEmissionProbability = new LogProb(1.0 / totalUniqueWords);
+			return;
+		}
 		
 		double totalProbability = 0.0;
 		double minProbability = 1.0;
@@ -523,10 +533,24 @@ class HMMState {
 
 	private static void renormalizeColumn(Map<HMMState, LogProb> col) {
 		double sum = 0.0;
+		LogProb max = new LogProb(0);
+		
 		for (LogProb l : col.values()) {
-			sum += l.getActualProbability();
+			if (l.getValue() > max.getValue()) max = l;
 		}
-		LogProb factor = new LogProb(sum);
+		
+		for (LogProb l : col.values()) {
+			double prob = l.sub(max).getActualProbability();
+			
+			sum += prob;
+		}
+		LogProb factor = new LogProb(sum); 
+		
+		//hacky fix for underflow
+		if (Double.isInfinite(factor.getValue())) {
+			for (HMMState s : col.keySet()) col.put(s, new LogProb(1.0 / col.size()));
+			return;
+		}
 
 		for (HMMState s : col.keySet()) {
 			col.put(s, col.get(s).sub(factor));
@@ -537,13 +561,16 @@ class HMMState {
 		Set<HMMState> allSeenStates = new HashSet<HMMState>();
 		
 		String message = "IsNaN found after renormalization:\nsparseMap:\n";
+		
+		int count = 0;
 		for (Map<HMMState, LogProb> col : sparseMap) {
 			for (HMMState s : col.keySet()) {
 				allSeenStates.add(s);
 				LogProb result = col.get(s);
-				message += s + " " + result + " ";
+				message += count + "\t" + s + " " + result + " ";
 			}
 			message += "\n";
+			count++;
 		}
 		message += "transitionProbs:\n";
 		for (HMMState s : allSeenStates) {
@@ -553,17 +580,18 @@ class HMMState {
 		}
 		Set<String> allStrings = new HashSet<String>();
 		
-		message += "document:\n";
-		for (List<String> line : doc) for (String s : line) {
-			message += s + " ";
-			allStrings.add(s);
+		message += "idx, document, target events\n";
+		int idx = 0;
+		List<String> flat = Utility.flatten(doc);
+		List<TargetEvent> flatEvents = Utility.flatten(events);
+		
+		for (int i=0; i<flat.size(); i++) {
+			message += i + "\t" + flatEvents.get(i) + "\t" + flat.get(i) + "\n";
 		}
-		message += "\ntarget events:\n";
-		for (List<TargetEvent> line : events) for (TargetEvent e : line) message += e + " ";
 		
 		message += "\nemission probabilities:\n";
 		for (HMMState s : allSeenStates) for (String word : allStrings) {
-			message += s + " " + s.getEmissionProbability(word, totalUniqueWords) + "\n";
+			message += s + " " + word + " " + s.getEmissionProbability(word, totalUniqueWords) + "\n";
 		}
 			
 		return message;
@@ -612,7 +640,11 @@ class HMMState {
 				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent, false, totalUniqueWords);
 				
 				if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(nextMap);
-				for (LogProb p  : nextMap.values()) if (Double.isNaN(p.getActualProbability())) {
+				 
+				boolean hasNaN = false; 
+				for (LogProb p  : nextMap.values()) if (Double.isNaN(p.getActualProbability())) hasNaN = true;
+				
+				if (hasNaN || nextMap.size() == 0) {
 					String message = dumpProbabilityTableState(sparseMap, doc, events, totalUniqueWords);
 					
 					throw new IllegalStateException(message+"\n(forwards prob)");
@@ -682,7 +714,7 @@ class HMMState {
 				}
 
 				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent, true, totalUniqueWords);
-
+ 
 				if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(nextMap);
 
 				for (LogProb p  : nextMap.values()) if (Double.isNaN(p.getActualProbability())) {
@@ -718,10 +750,10 @@ class HMMState {
 				
 				outMap.put(nextState, nextState.getEmissionProbability(curString, totalUniqueWords).add(transitions.get(nextState)).add(cur.get(s)));
 				
-				LogProb a = nextState.getEmissionProbability(curString, totalUniqueWords);
-				LogProb b = transitions.get(nextState);
-				LogProb c = cur.get(s);
 				if (Double.isNaN(outMap.get(nextState).getActualProbability())) {
+					LogProb a = nextState.getEmissionProbability(curString, totalUniqueWords);
+					LogProb b = transitions.get(nextState);
+					LogProb c = cur.get(s);
 					throw new IllegalArgumentException("Found NaN probability in directionalProbabilityStep\n"
 														+ cur + " -> " + nextState + "\n"
 														+ "emission = "+a+", P(b | a) = " + b + ", previous term = "+c);
@@ -733,7 +765,14 @@ class HMMState {
 	}
 	
 	private static LogProb findTargetProbabilityOrSumIfTargetNull(Map<HMMState, LogProb> lastMap, HMMState trg) {
+		if (trg != null) {
+			LogProb out = lastMap.get(trg);
+			if (out == null) return new LogProb(0);
+			return out;
+		}
+		
 		LogProb out = new LogProb(1);
+		
 		
 		for (HMMState s : lastMap.keySet()) {
 			LogProb prob = lastMap.get(s);
@@ -742,8 +781,7 @@ class HMMState {
 			out = out.add(prob);
 		}
 		
-		if  (trg == null) return out;
-		return new LogProb(0);
+		return out;
 	}
 	
 	public List<HMMState> getLineOfSameType() {
@@ -811,7 +849,14 @@ class HMMState {
 	}
 	
 	public void stealTransitions(HMMState other) {
+		LogProb selfCycleProb =  other.transitions.remove(other);
 		transitions = other.transitions;
+		if (selfCycleProb != null) {
+			other.parents.remove(other);
+			this.parents.add(this);
+			this.transitions.put(this, selfCycleProb);
+		}
+		
 		other.transitions = new HashMap<HMMState, LogProb>();
 		for (HMMState child : transitions.keySet()) {
 			child.parents.remove(other);
@@ -848,7 +893,7 @@ class HMMState {
 	}
 	
 	public void updateChild(HMMState s, LogProb p) {
-		if (!transitions.containsKey(s)) throw new IllegalStateException();
+		if (!transitions.containsKey(s)) throw new IllegalStateException("Attempted to add logProb to child "+this+" doesn't have");
 		
 		transitions.put(s, p);
 	}
@@ -904,7 +949,7 @@ class HMMState {
 		else if (event == TargetEvent.EXIT) {
 			matching = start.getType() == StateType.TARGET && end.getType() != StateType.TARGET;
 		}
-		else throw new IllegalStateException();
+		else throw new IllegalStateException("Unexpected TargetEvent for isLegalTransition()");
 		
 		return matching;
 	}
@@ -984,7 +1029,7 @@ public class HiddenMarkovModel {
 		if (headNode != null && stateHeadContexts.get(headNode) != null) {
 			return stateHeadContexts.get(headNode);
 		}
-		if (headNode != null && stateHeadContexts.get(headNode) == null) throw new IllegalStateException();
+		if (headNode != null && stateHeadContexts.get(headNode) == null) throw new IllegalStateException("Couldn't find context for head "+headNode);
 		
 		
 		//if headNode == null, then assuming the new node will be a head node
@@ -1001,7 +1046,7 @@ public class HiddenMarkovModel {
 		case RETARGET:
 			return global;
 		default:
-			throw new IllegalStateException();
+			throw new IllegalStateException("Unexpected StateType in getHierarchyParent");
 		}
 	}
 	
@@ -1015,18 +1060,49 @@ public class HiddenMarkovModel {
 	}
 	
 	void split(HMMState start) {
-		List<HMMState> list = new ArrayList<HMMState>();
+		List<HMMState> oldList = start.getLineOfSameType();
+		 
+		StateType type = start.getType();
 		
-		list.add(start);
+		HMMState head = addHead(type);
 		
-		while (list.get(list.size()-1).getType() == start.getType()) {
-			HMMState top = list.get(list.size()-1);
+		List<HMMState> newList = new ArrayList<HMMState>();
+		
+		newList.add(head);
+		
+		for (HMMState parent : start.getParents()) {
+			if (parent == start) continue;
 			
-			HMMState next = top.getSingleOutgoingEdge();
+			LogProb chance = parent.getTransitions().get(start);
+			parent.addChild(head, chance);
+		}
+		
+		for (int i=1; i<oldList.size(); i++) {
+			HMMState newChild = new HMMState(type, this.getHierarchyParent(head, type));
+			newList.add(newChild);
+			addState(newChild);
+		} 
+		
+		for (int i=1; i<newList.size(); i++) {
+			HMMState prev = newList.get(i-1);
+			HMMState next = newList.get(i);
 			
-			if (next == null) break;
+			HMMState prevOld = oldList.get(i-1);
+			LogProb selfCycleChance = prevOld.getTransitions().get(prevOld);
+			if (selfCycleChance != null) prev.addChild(prev, selfCycleChance);
 			
-			list.add(next);
+			HMMState nextOld = oldList.get(i);
+			LogProb forwardsChance = prevOld.getTransitions().get(nextOld);
+			prev.addChild(next, forwardsChance);
+		}
+		
+		HMMState last = newList.get(newList.size()-1);
+		HMMState oldLast = oldList.get(oldList.size()-1);
+		
+		for (HMMState other : oldLast.getTransitions().keySet()) {
+			LogProb chance = oldLast.getTransitions().get(other);
+			if (other == oldLast) other = last;
+			last.addChild(other, chance);
 		}
 	}
 	//void split()
@@ -1056,7 +1132,7 @@ public class HiddenMarkovModel {
 		
 		if (s == start || s == retargetSuffix) return null;
 
-		throw new IllegalStateException();
+		throw new IllegalStateException("Couldn't find head in getHead");
 	}
 	
 	
@@ -1093,7 +1169,7 @@ public class HiddenMarkovModel {
 				break;
 				
 			default:
-				throw new IllegalStateException();
+				throw new IllegalStateException("Unexpected StateType in deepCopy()");
 			}
 			
 		}
@@ -1255,8 +1331,11 @@ public class HiddenMarkovModel {
 		double sum = 0.0;
 		for (HMMState s : i.getTransitions().keySet()) {
 			sum += xiTable.find(i, s, t).getActualProbability();
+			/*if (Double.isNaN(sum)) {
+				throw new IllegalStateException("NaN gamma");
+			}*/
 			//sum += xi(i, s, t, den, words, events, forwards, backwards).getActualProbability();
-		}
+		} 
 		return new LogProb(sum);
 	}
 
@@ -1271,7 +1350,7 @@ public class HiddenMarkovModel {
 		case TARGET:
 			return targetStateHeads;
 		default:
-			throw new IllegalStateException();
+			throw new IllegalStateException("Unexpected StateType in getHeadListForType()");
 		}
 	}
 
@@ -1340,7 +1419,7 @@ public class HiddenMarkovModel {
 		
 		for (HMMState s : states)  {
 			for (HMMState k : s.getTransitions().keySet()) {
-				transitionProbNumerator.put(new StatePair(s, k), 0.0);
+				transitionProbNumerator.put(new StatePair(s, k), Math.pow(10, -50));
 			}
 		}
 
@@ -1423,9 +1502,9 @@ public class HiddenMarkovModel {
 			}
 			denTimer.pause();
 			trainTimer.pause();
-			
+			 
 			if (Double.isNaN(commonDenominator)) {
-				throw new IllegalStateException();
+				throw new IllegalStateException("NaN commonDenominator");
 			}
 		}
 		
@@ -1575,7 +1654,7 @@ public class HiddenMarkovModel {
 		}
 	}
 	
-	public void addHead(StateType t) {
+	public HMMState addHead(StateType t) {
 		HMMState s = new HMMState(t, new StateHierarchy(getHierarchyParent(null, t), t.toString()+"_HEAD"));
 		stateHeadContexts.put(s, s.hierarchyNode.parent);
 		
@@ -1619,6 +1698,8 @@ public class HiddenMarkovModel {
 		default:
 			throw new IllegalArgumentException("Unexpected StateType in addHead");
 		}
+		
+		return s;
 	}
 	
 	public static HiddenMarkovModel generateBasicModel() {

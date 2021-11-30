@@ -22,35 +22,18 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 		return model;
 	};
 	
-	private static List<HiddenMarkovModel> mutate(HiddenMarkovModel base) {
-		List<HiddenMarkovModel> candidates = new ArrayList<HiddenMarkovModel>();
-		for (int i=0; i<base.getAllHeads().size(); i++) {
-			HiddenMarkovModel splitCopy = base.deepCopy();
-			splitCopy.split(splitCopy.getAllHeads().get(i));
-			candidates.add(splitCopy);
-			
-			if (base.getAllHeads().get(i).getType() == StateType.BACKGROUND) continue;
-			
-			HiddenMarkovModel longCopy = base.deepCopy();
-			longCopy.lengthen(longCopy.getAllHeads().get(i));
-			
-			candidates.add(longCopy);
-		}
-		
-		return candidates;
-	}
 	
 
 	public static HiddenMarkovModel evolveOptimal(List<HMMTrainingDocument> trainData, List<HMMTrainingDocument> testData,
 												  Function<HiddenMarkovModel, Double> evaluator) {
-		final int TOTAL_STEPS = 3;
-		final int MAX_NUM_CANDIDATES = 5;
+		final int TOTAL_STEPS = 5;
+		final int MAX_NUM_CANDIDATES = 4;
 		
-		final int OPT_STEPS = 5;
+		final int OPT_STEPS = 3;
 		
 		Comparator<Candidate> candidateComparator = (a, b) -> {
-			if (a.score < b.score) return -1;
-			if (a.score > b.score) return 1;
+			if (a.score < b.score) return 1;
+			if (a.score > b.score) return -1;
 			return 0;
 		};
 		
@@ -58,11 +41,10 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 			List<Candidate> out;
 			
 			Timer mutationTimer = new Timer();
-			mutationTimer.start();
 			out = mutatorList.parallelStream()
+			//out = mutatorList.stream()
 				.map((evolution) -> {return new Candidate(evolution, OPT_STEPS, trainData, testData, evaluator);})
 				.collect(Collectors.toList());
-			mutationTimer.stopAndPrintFuncTiming("Optimizing single mutation candidate");
 			
 			return out;
 		};
@@ -97,7 +79,10 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 			}
 			
 			Collections.sort(out, candidateComparator);
-			out = out.subList(0, MAX_NUM_CANDIDATES);
+			List<Candidate> goodCandidates = new ArrayList<Candidate>();
+			for (int k=0; k<MAX_NUM_CANDIDATES; k++) goodCandidates.add(out.get(k));
+			out = goodCandidates;
+			keptCandidates.add(out.get(0));
 		}
 		
 		Collections.sort(out, candidateComparator);
@@ -130,8 +115,8 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 			for (int i=0; i<category.size(); i++) {
 				MutatorInput in = new MutatorInput(i, t);
 				
-				out.add(new Mutator(mutateLengthen, in));
-				if (t != StateType.BACKGROUND) out.add(new Mutator(mutateSplit, in));
+				out.add(new Mutator(mutateSplit, in));
+				if (t != StateType.BACKGROUND && t != StateType.TARGET) out.add(new Mutator(mutateLengthen, in));
 			}
 
 			return out;
