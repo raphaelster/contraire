@@ -26,10 +26,10 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 
 	public static HiddenMarkovModel evolveOptimal(List<HMMTrainingDocument> trainData, List<HMMTrainingDocument> testData,
 												  Function<HiddenMarkovModel, Double> evaluator) {
-		final int TOTAL_STEPS = 5;
+		final int TOTAL_STEPS = 10;
 		final int MAX_NUM_CANDIDATES = 4;
 		
-		final int OPT_STEPS = 3;
+		final int OPT_STEPS = 10;
 		
 		Comparator<Candidate> candidateComparator = (a, b) -> {
 			if (a.score < b.score) return 1;
@@ -85,9 +85,9 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 			keptCandidates.add(out.get(0));
 		}
 		
-		Collections.sort(out, candidateComparator);
+		Collections.sort(keptCandidates, candidateComparator);
 		
-		return out.get(0).model;
+		return keptCandidates.get(0).model;
 	}
 	
 	

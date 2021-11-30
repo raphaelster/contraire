@@ -393,7 +393,7 @@ class HMMState {
 		Set<String> keysToRemove = new HashSet<String>();
 
 		for (String s : emissions.keySet()) {
-			if (emissions.get(s).getValue() < -400) {
+			if (emissions.get(s).getValue() < -800) {
 				LogProb p = emissions.get(s);
 				keysToRemove.add(s);
 			}
@@ -1399,7 +1399,7 @@ public class HiddenMarkovModel {
 		Map<StatePair, Double> transitionProbNumerator = new HashMap<StatePair, Double>();
 		Map<HMMState, Map<String, Double>> emissionProbNumerator = new HashMap<HMMState, Map<String, Double>>();
 
-		double commonDenominator = 0.0;
+		double commonDenominator = 0.0001;
 		
 
 		double totalUniqueWords;
@@ -1557,6 +1557,8 @@ public class HiddenMarkovModel {
 		if (clear) normalizeProbabilities(trainingDocs);
 		
 		Timer t = new Timer();
+		double prevScore = test(testingDocs);
+		
 		for (int i=0; i < numSteps; i++) {
 			if (printTiming) System.out.println("Beginning training step");
 			t.start();
@@ -1564,6 +1566,14 @@ public class HiddenMarkovModel {
 			if (printTiming) t.stopAndPrintFuncTiming("Full Baum-Welch Step");
 			smoothTransitions();
 			normalizeTransitions();
+			
+			double postScore = test(testingDocs);
+			
+			//do_stuff()?
+			if (printTiming) {
+				System.out.println(prevScore+" -> "+postScore);
+			}
+			prevScore = postScore;
 		}
 	}
 	
@@ -1748,12 +1758,10 @@ public class HiddenMarkovModel {
 	}
 	
 	private double test(List<HMMTrainingDocument> trainingFiles) {
-		double correctNonTargets = 0.001;
-		double correctTargets = 0.001;
-		double guessedTargets = 0.001;
-		double guessedNonTargets = 0.001;
-		double expectedNonTargets = 0.001;
-		double expectedTargets = 0.001;
+		double correctTarget = 0.0;
+		double guessedTarget = 0.0;
+		double totalTarget = 0.0;
+		double expectedTarget = 0.0;
 		
 		double vocabSize = estimateVocabularySize(trainingFiles, null);
 		
@@ -1772,33 +1780,26 @@ public class HiddenMarkovModel {
 				if (event == TargetEvent.EXIT)  extracting = false;
 				
 				if (extracting) {
-					if (state.getType() == StateType.TARGET) correctTargets++;
-					expectedTargets++;
+					if (state.getType() == StateType.TARGET) correctTarget++;
+					expectedTarget++;
 				}
 				else {
-					if (state.getType() != StateType.TARGET) correctNonTargets++;
-					expectedNonTargets++;
+					
 				}
 				
-				if (state.getType() == StateType.TARGET) guessedTargets++;
-				else guessedNonTargets++;
+				if (state.getType() == StateType.TARGET) guessedTarget++;
 				
 			}
 		}
 		
-		double targetPrecision = correctTargets / guessedTargets;
-		double targetRecall    = correctTargets / expectedTargets;
-		double ntPrecision = correctNonTargets / guessedNonTargets;
-		double ntRecall    = correctNonTargets / expectedNonTargets;
+		double targetPrecision = correctTarget / guessedTarget;
+		double targetRecall    = correctTarget / expectedTarget;
 		
-		double targetF1 = 2*(targetPrecision * targetRecall) / (targetPrecision + targetRecall);
-		double ntF1     = 2*(ntPrecision * ntRecall) / (ntPrecision + ntRecall);
+		double fScore = 2*(targetPrecision * targetRecall) / (targetPrecision + targetRecall);
 		
-		if (Double.isNaN(targetF1) && Double.isNaN(ntF1)) throw new IllegalStateException("NaN found for both targetF1 and nonTargetF1 in test()");
-		if (Double.isNaN(targetF1)) return 2*ntF1;
-		else if (Double.isNaN(ntF1)) return 2*targetF1;
+		if (correctTarget == 0.0) fScore = 0.0;
 		
-		else return targetF1 + ntF1;
+		return fScore;
 		
 	}
 	
@@ -1830,7 +1831,7 @@ public class HiddenMarkovModel {
 		
 		if (capturing && capturingTokens.size() > 0) allCapturedTokens.add(concatFunc.apply(capturingTokens));
 
-		
+		/*
 		if (extractSingle) {
 			Set<ConvertedWord> out = new HashSet<ConvertedWord>();
 			for (ConvertedWord s : allCapturedTokens) {
@@ -1839,7 +1840,7 @@ public class HiddenMarkovModel {
 			}
 			
 			return out;
-		}
+		}*/
 		
 		return allCapturedTokens;
 	}

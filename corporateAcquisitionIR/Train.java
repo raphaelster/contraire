@@ -43,16 +43,18 @@ public class Train {
 	}
 	
 	static class Score {
-		double fScore;
-		double correctExtractions;
-		double correctNonAnswers;
-		double incorrectNonAnswers;
+		double correct;
+		double totalGuessed;
+		double totalExpected;
 		
-		public Score(double f, double c, double na, double icNa) {
-			fScore = f;
-			correctExtractions = c;
-			correctNonAnswers = na;
-			incorrectNonAnswers = icNa;
+		public Score(double c, double tG, double tE) {
+			correct = c;
+			totalGuessed = tG;
+			totalExpected = tE;
+			
+			if (Double.isNaN(c) || Double.isNaN(tG) || Double.isNaN(tE)) {
+				throw new IllegalStateException("NaN score");
+			}
 		}
 	}
 	
@@ -85,54 +87,36 @@ public class Train {
 			System.out.println(" Expected "+totalExpected+" results, got "+totalActual+" results. ");
 		}
 		
-		double correctlyNotIdentifyScore = 0.001;
-		
-		if (totalExpected == 0 && totalActual == 0) {
-			if (verbose) System.out.println(" F score is "+correctlyNotIdentifyScore+" (correctly didn't identify)");
-			return new Score(correctlyNotIdentifyScore, 0.0, 1.0, 0.0);
-		}
-		if (totalActual == 0 ^ totalExpected == 0) {
-			if (verbose) System.out.println(" F score is 0.0 (one set is empty, other isn't)");
-			return new Score(0.0, 0.0, 0.0, (totalActual == 0 ? 1 : 0));
-		}
-		
-		double precision = totalCorrect / totalGuesses;
-		double recall    = totalCorrect / expectedResults.size();
-		
-		double fScore = 2.0 * (precision * recall) / (precision + recall);
-		
-		if (Double.isNaN(fScore)) fScore = 0;
-		
-		if (verbose) System.out.println(" F score is "+fScore+", precision = "+precision+" and recall = "+recall);
-		if (fScore > 0 && verbose) {
-			System.out.println("A hit!");
-		}
-		return new Score(fScore, totalCorrect, 0.0, 0.0);
+		return new Score(totalCorrect, totalActual, totalExpected);
 		
 	}
 	
 	public static double scoreAll(HiddenMarkovModel model, List<List<List<ConvertedWord>>> trainingCorpus, List<ExtractedResult> expectedResults, ResultField f, boolean verbose) {
 		
-		double totalFScore = 0.0;
-		double correctExtractions = 0.0;
-		double correctNonAnswers = 0.0;
-		double incorrectNonAnswers = 0.0;
+		double totalCorrect = 0.0;
+		double totalGuesses = 0.0;
+		double totalExpected = 0.0;
 		
 		for (int i=0; i<trainingCorpus.size(); i++) {
 			List<ConvertedWord> trainingInstance = Utility.flatten(trainingCorpus.get(i));
 			ExtractedResult expected = expectedResults.get(i);
 			
 			Score score = score(model, trainingInstance, expected, f, verbose);
-			
-			totalFScore += score.fScore;
-			correctExtractions += score.correctExtractions;
-			correctNonAnswers += score.correctNonAnswers;
-			incorrectNonAnswers += score.incorrectNonAnswers;
+
+			totalCorrect += score.correct;
+			totalExpected += score.totalExpected;
+			totalGuesses += score.totalGuessed;
+					
 		}
 		
-		if (verbose) System.out.println("Total F score: "+totalFScore+"/"+trainingCorpus.size()+", successfully extracted "+correctExtractions+" events ("+correctNonAnswers+" correct non-answers, "
-										+incorrectNonAnswers+" incorrect)");
-		return totalFScore;
+		double precision = totalCorrect / totalGuesses;
+		if (Double.isNaN(precision)) precision = Math.pow(10, -50);
+		double recall = totalCorrect / totalExpected;
+		double fScore = 2*(precision * recall) / (precision + recall);
+		if (Double.isNaN(fScore)) fScore = 0.0;
+		
+		if (verbose) System.out.println("Total F score: "+fScore+", precision is "+precision+" and recall is "+recall+"\n"+totalCorrect+" successful extractions");
+		return fScore;
 	}
 	
 	public static void main(String[] args) {
@@ -249,7 +233,7 @@ public class Train {
 		{
 			List<HMMTrainingDocument> profileTraining = HMMTrainingDocument.makeFromCorpusForField(convertedCorpus, allKeyFiles, ResultField.ACQUIRED, tokenizeSingle);
 
-			profileHMM.baumWelchOptimize(10, profileTraining, profileTraining, true, true);
+			profileHMM.baumWelchOptimize(100, profileTraining, profileTraining, true, true);
 		}
 		
 		for (ResultField f : ResultField.values()) {

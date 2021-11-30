@@ -17,6 +17,7 @@ public class ConvertedWord {
 		convertedWord = convert;
 	}
 	
+	private static Pattern numberPattern = Pattern.compile("(\\d+,)*\\d+(\\.\\d+)?");
 	
 	public static List<List<ConvertedWord>> convertParsedFile(List<List<CoreLabel>> doc) {
 		List<List<ConvertedWord>> out = new ArrayList<List<ConvertedWord>>();
@@ -28,6 +29,7 @@ public class ConvertedWord {
 				String convertedWord = label.getString(CoreAnnotations.AnswerAnnotation.class);
 				
 				if (convertedWord.equals("O")) convertedWord = rawWord;
+				if (numberPattern.matcher(convertedWord).find()) convertedWord = "NUM";
 				out.get(out.size()-1).add(new ConvertedWord(rawWord, convertedWord));
 			}
 		}
@@ -67,10 +69,6 @@ public class ConvertedWord {
 			out.convertedWord = out.convertedWord.substring(0, out.convertedWord.length()-1);
 		}
 		
-		if (list.size() > 1) {
-			System.out.println("hmm");
-		}   
-
 		out.rawWord = removeAddedWhitespacePattern.matcher(out.rawWord).replaceAll((m) -> {return m.group(1);});
 		out.rawWord = removeWhitespaceBeforePattern.matcher(out.rawWord).replaceAll((m) -> {return m.group(1);});
 		out.rawWord = removeWhitespaceAfterPattern.matcher(out.rawWord).replaceAll((m) -> {return m.group(1);});
