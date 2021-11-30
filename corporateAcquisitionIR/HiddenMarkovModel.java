@@ -1,12 +1,15 @@
 package corporateAcquisitionIR;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.Stack;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 enum StateType {
@@ -30,6 +33,7 @@ class StateHierarchy {
 	private boolean probabilityIsUniform;
 	private Map<String, List<Double>> memoizedEmissions;
 	private String name;
+	private double vocabularySize;
 	
 	List<Double> lambdas;
 
@@ -79,10 +83,11 @@ class StateHierarchy {
 		
 	}
 	
-	void optimizeLambdaStep(HMMState child, List<String> emissionsSeenForThisState) {
+	void optimizeLambdaStep(HMMState child, Set<String> emissionsSeenForThisState, double totalUniqueWords) {
 		normalizeLambdas();
 		
 		List<Double> priorLambdas = new ArrayList<Double>();
+		
 
 		while (true) {
 			priorLambdas.clear();
@@ -92,7 +97,7 @@ class StateHierarchy {
 			for (int i=0; i<lambdas.size(); i++) betas.add(0.0);
 			
 			for (String word : emissionsSeenForThisState) {
-				List<Double> emissions = getEmissionVector(word);
+				List<Double> emissions = getEmissionVector(word, totalUniqueWords);
 				
 				double total = 0.0;
 				for (int nth = 0; nth < lambdas.size(); nth++) total += lambdas.get(nth) * emissions.get(nth); 
@@ -178,14 +183,14 @@ class StateHierarchy {
 		this.probabilityIsUniform = b;
 	}
 	
-	private List<Double> getEmissionVector(String word) {
+	private List<Double> getEmissionVector(String word, double totalUniqueWords) {
 		if (memoizedEmissions.containsKey(word)) return memoizedEmissions.get(word);
 		
 		List<Double> out = new ArrayList<Double>();
 		
 		for (StateHierarchy top = this; top != null; top = top.parent) {
 			if (top.probabilityIsUniform) {
-				out.add(1.0);
+				out.add(1.0 / totalUniqueWords);
 				continue;
 			}
 			
@@ -195,7 +200,7 @@ class StateHierarchy {
 			double totalLeafProbability = 1.0 * leaves.size();
 			double sum = 0.0;
 			for (StateHierarchy leaf : leaves) {
-				LogProb cur = leaf.value.getEmissionProbability(word, true);
+				LogProb cur = leaf.value.getEmissionProbability(word, totalUniqueWords, true);
 				sum += cur.getActualProbability();
 			}
 			sum /= totalLeafProbability;
@@ -206,10 +211,10 @@ class StateHierarchy {
 		return out;
 	}
 	
-	LogProb getProbability(String word) {
+	LogProb getProbability(String word, double totalUniqueWords) {
 		if (this.probabilityIsUniform) return new LogProb(1.0);
 		
-		List<Double> emissionVec = getEmissionVector(word);
+		List<Double> emissionVec = getEmissionVector(word, totalUniqueWords);
 		
 		if (emissionVec.size() != lambdas.size()) throw new IllegalStateException("StateHierarchy: |lambdas| != |emissionVector|");
 		
@@ -218,6 +223,8 @@ class StateHierarchy {
 		for (int i=0; i<emissionVec.size(); i++) {
 			finalProb += emissionVec.get(i) * lambdas.get(i);
 		}
+		
+		
 		
 		return new LogProb(finalProb);
 	}
@@ -247,6 +254,10 @@ class HMMState {
 		type = t;
 		hierarchyNode = new StateHierarchy(parent, this);
 		id = maxID++;
+	}
+	
+	public Set<String> getEmissionWords() {
+		return emissions.keySet();
 	}
 	
 	public String getToStringWithoutChildren() {
@@ -315,11 +326,11 @@ class HMMState {
 		return out;
 	}
 	
-	public LogProb getEmissionProbability(String word, boolean ignoreHierarchy) {
+	public LogProb getEmissionProbability(String word, double totalUniqueWords, boolean ignoreHierarchy) {
 		if (IGNORE_CASE) word = word.toLowerCase();
 		
 
-		if (!ignoreHierarchy) return hierarchyNode.getProbability(word);
+		if (!ignoreHierarchy) return hierarchyNode.getProbability(word, totalUniqueWords);
 		
 		if (word.equals(HiddenMarkovModel.PHI_TOKEN) && this.type != StateType.PHI) {
 			return new LogProb(0);
@@ -333,8 +344,8 @@ class HMMState {
 		return baseEmissionProb;
 	}
 	
-	public LogProb getEmissionProbability(String word) {
-		return getEmissionProbability(word, false);
+	public LogProb getEmissionProbability(String word, double totalUniqueWords) {
+		return getEmissionProbability(word, totalUniqueWords, false);
 	}
 	
 	public LogProb getProbabilityTo(HMMState next) {
@@ -401,10 +412,6 @@ class HMMState {
 		for (String s : emissions.keySet()) {
 			emissions.put(s, emissions.get(s).sub(totalProbLog));
 			minProbability = Math.min(minProbability, emissions.get(s).getActualProbability());
-			if (minProbability == 0.00) {
-				LogProb p = emissions.get(s);
-				System.out.print("");;
-			}
 		}
 		totalProbability = 1.0;
 
@@ -422,7 +429,9 @@ class HMMState {
 		defaultEmissionProbability = new LogProb(defaultProb);
 		
 		if (!Double.isFinite(defaultEmissionProbability.getValue())) {
-			throw new IllegalArgumentException("Default probability is meant to be nonzero");
+			System.out.println("Error; default probability = 0");
+			defaultEmissionProbability = new LogProb(Math.pow(10, -200));
+			//throw new IllegalArgumentException("Default probability is meant to be nonzero");
 		}
 		/*
 		//double addedValue = totalProbability / totalWords / 10.0 / (totalUniqueWords);
@@ -438,11 +447,11 @@ class HMMState {
 		
 	}
 	
-	void updateLambdas(List<String> testEmissions) {
-		hierarchyNode.optimizeLambdaStep(this, testEmissions);
+	void updateLambdas(Set<String> testEmissions, double totalUniqueWords) {
+		hierarchyNode.optimizeLambdaStep(this, testEmissions, totalUniqueWords);
 	}
 	
-	public Extraction getOptimalSequence(List<String> doc) {
+	public Extraction getOptimalSequence(List<String> doc, double totalUniqueWords) {
 		if (doc.size() == 0) return new Extraction();
 		
 		class ProbBackPointer {
@@ -466,7 +475,7 @@ class HMMState {
 		
 		Map<HMMState, ProbBackPointer> prior = new HashMap<HMMState, ProbBackPointer>();
 		
-		prior.put(this, new ProbBackPointer(this.getEmissionProbability(doc.get(0)), this));
+		prior.put(this, new ProbBackPointer(this.getEmissionProbability(doc.get(0), totalUniqueWords), this));
 		
 		
 		for (int i=1; i<doc.size(); i++) {
@@ -483,7 +492,7 @@ class HMMState {
 					LogProb prob = prior.get(before).prob;
 					
 					LogProb transProb = before.getProbabilityTo(after);
-					LogProb emissionProb = after.getEmissionProbability(word);
+					LogProb emissionProb = after.getEmissionProbability(word, totalUniqueWords);
 					prob = prob.add(transProb).add(emissionProb);
 					int bestID = Integer.MAX_VALUE;	//use ID as tiebreaker, since the hash map ordering is actually random
 					if (best.backPointers.size() > 0) bestID = best.backPointers.get(best.backPointers.size()-1).id;
@@ -524,7 +533,43 @@ class HMMState {
 		}
 	}
 	
-	public ProbabilityTable getForwardsProbabilityTable(List<List<String>> doc, List<List<TargetEvent>> events) {
+	private static String dumpProbabilityTableState(List<Map<HMMState, LogProb>> sparseMap, List<List<String>> doc, List<List<TargetEvent>> events, double totalUniqueWords) {
+		Set<HMMState> allSeenStates = new HashSet<HMMState>();
+		
+		String message = "IsNaN found after renormalization:\nsparseMap:\n";
+		for (Map<HMMState, LogProb> col : sparseMap) {
+			for (HMMState s : col.keySet()) {
+				allSeenStates.add(s);
+				LogProb result = col.get(s);
+				message += s + " " + result + " ";
+			}
+			message += "\n";
+		}
+		message += "transitionProbs:\n";
+		for (HMMState s : allSeenStates) {
+			for (HMMState other : s.transitions.keySet()) {
+				message += s + " -> " + other + " = " + s.transitions.get(other) + "\n";
+			}
+		}
+		Set<String> allStrings = new HashSet<String>();
+		
+		message += "document:\n";
+		for (List<String> line : doc) for (String s : line) {
+			message += s + " ";
+			allStrings.add(s);
+		}
+		message += "\ntarget events:\n";
+		for (List<TargetEvent> line : events) for (TargetEvent e : line) message += e + " ";
+		
+		message += "\nemission probabilities:\n";
+		for (HMMState s : allSeenStates) for (String word : allStrings) {
+			message += s + " " + s.getEmissionProbability(word, totalUniqueWords) + "\n";
+		}
+			
+		return message;
+	}
+	
+	public ProbabilityTable getForwardsProbabilityTable(List<List<String>> doc, List<List<TargetEvent>> events, double totalUniqueWords) {
 		List<Map<HMMState, LogProb>> sparseMap = new ArrayList<Map<HMMState, LogProb>>();
 		
 		if (doc.size() == 0) return new ProbabilityTable(sparseMap);
@@ -535,7 +580,7 @@ class HMMState {
 		
 		
 		Map<HMMState, LogProb> startNode = new HashMap<HMMState, LogProb>();
-		startNode.put(this, this.getEmissionProbability(doc.get(0).get(0)));
+		startNode.put(this, this.getEmissionProbability(doc.get(0).get(0), totalUniqueWords));
 		sparseMap.add(startNode);
 		
 		if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(startNode);
@@ -564,11 +609,13 @@ class HMMState {
 					transitions.get(s).putAll(s.transitions);
 				}
 				
-				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent, false);
+				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent, false, totalUniqueWords);
 				
 				if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(nextMap);
 				for (LogProb p  : nextMap.values()) if (Double.isNaN(p.getActualProbability())) {
-					throw new IllegalStateException();
+					String message = dumpProbabilityTableState(sparseMap, doc, events, totalUniqueWords);
+					
+					throw new IllegalStateException(message+"\n(forwards prob)");
 				}
 					
 				sparseMap.add(nextMap);
@@ -582,7 +629,8 @@ class HMMState {
 	}
 	
 
-	public ProbabilityTable getBackwardsProbabilityTable(Set<HMMState> allStates, List<List<String>> doc, List<List<TargetEvent>> events) {
+	public ProbabilityTable getBackwardsProbabilityTable(Set<HMMState> allStates, List<List<String>> doc, List<List<TargetEvent>> events,
+														 double totalUniqueWords) {
 		List<Map<HMMState, LogProb>> sparseMap = new ArrayList<Map<HMMState, LogProb>>();
 		
 		int stopAtIthWord = 0;
@@ -633,9 +681,16 @@ class HMMState {
 					}
 				}
 
-				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent, true);
+				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent, true, totalUniqueWords);
 
 				if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(nextMap);
+
+				for (LogProb p  : nextMap.values()) if (Double.isNaN(p.getActualProbability())) {
+					String message = dumpProbabilityTableState(sparseMap, doc, events, totalUniqueWords);
+					
+					throw new IllegalStateException(message+"\n(backwards prob)");
+				}
+					
 				
 				sparseMap.add(nextMap);
 			}
@@ -647,7 +702,8 @@ class HMMState {
 	}
 	
 	private static Map<HMMState, LogProb> directionalProbabilityStep(Map<HMMState, LogProb> cur, Map<HMMState, Map<HMMState, LogProb>> allTransitions, 
-																	 String curString, TargetEvent curEvent, boolean flipTransitionLegality) {
+																	 String curString, TargetEvent curEvent, boolean flipTransitionLegality,
+																	 double totalUniqueWords) {
 		Map<HMMState, LogProb> outMap = new HashMap<HMMState, LogProb>();
 		
 		for (HMMState s : cur.keySet()) {
@@ -660,9 +716,9 @@ class HMMState {
 				
 				if (!outMap.containsKey(nextState)) outMap.put(nextState, new LogProb(1.0));
 				
-				outMap.put(nextState, nextState.getEmissionProbability(curString).add(transitions.get(nextState)).add(cur.get(s)));
+				outMap.put(nextState, nextState.getEmissionProbability(curString, totalUniqueWords).add(transitions.get(nextState)).add(cur.get(s)));
 				
-				LogProb a = nextState.getEmissionProbability(curString);
+				LogProb a = nextState.getEmissionProbability(curString, totalUniqueWords);
 				LogProb b = transitions.get(nextState);
 				LogProb c = cur.get(s);
 				if (Double.isNaN(outMap.get(nextState).getActualProbability())) {
@@ -694,35 +750,36 @@ class HMMState {
 		List<HMMState> out = new ArrayList<HMMState>();
 		Set<HMMState> visited = new HashSet<HMMState>();
 		
-		out.add(this);
-		
-		while (true) {
-			HMMState top = out.get(out.size()-1);
+		Stack<HMMState> traversal = new Stack<HMMState>();
+		traversal.add(this);
+		 
+		while (traversal.size() > 0) {
+			HMMState top = traversal.pop();
+			
 			if (visited.contains(top)) throw new IllegalStateException("Detected same-type cycle (that isn't a self-cycle)");
 			visited.add(top);
+			out.add(top);
 			
-			List<HMMState> adjacentIgnoringSelfCycles = new ArrayList<HMMState>();
-			for (HMMState s : top.transitions.keySet()) {
-				if (s != top) adjacentIgnoringSelfCycles.add(s);
+			Set<HMMState> adjacent = top.transitions.keySet();
+			List<HMMState> adjacentSameType = new ArrayList<HMMState>();
+			
+			for (HMMState s : adjacent) {
+				if (s.getType() != top.getType()) continue;
+				if (s == top) continue;
+				adjacentSameType.add(s);
 			}
 			
-			int sameTypeCount = 0;
-			for (HMMState s : adjacentIgnoringSelfCycles) {
-				if (s.type == top.type) sameTypeCount++;
-			}
+			if (adjacentSameType.size() > 1) throw new IllegalStateException("Found branch of same type off state");
 			
-			if (sameTypeCount == 0) return out;
-			if (sameTypeCount > 1) throw new IllegalStateException();
-			
-			for (HMMState s : adjacentIgnoringSelfCycles) {
-				if (s.type == top.type) out.add(top);
-				break;
-			}
+			if (adjacentSameType.size() > 0) traversal.add(adjacentSameType.get(0));
 		}
+		
+		return out;
 	}
 	
 	public void replaceInvalidReferencesFromShallowCopy(Map<HMMState, HMMState> oldToNew, StateHierarchy newParent) {
-		Set<HMMState> oldTransitions = transitions.keySet();
+		Set<HMMState> oldTransitions = new HashSet<HMMState>();
+		oldTransitions.addAll(transitions.keySet());
 		hierarchyNode.setParent(newParent);
 		
 		for (HMMState oldState : oldTransitions) {
@@ -761,6 +818,7 @@ class HMMState {
 			child.parents.add(this);
 		}
 	}
+	
 	
 	//ignores self cycles
 	HMMState getSingleOutgoingEdge() {
@@ -835,7 +893,7 @@ class HMMState {
 	
 	public Map<HMMState, LogProb> getTransitions() { return transitions; }
 	
-	private static boolean isLegalTransition(HMMState start, HMMState end, TargetEvent event) {
+	public static boolean isLegalTransition(HMMState start, HMMState end, TargetEvent event) {
 		if (event == TargetEvent.NO_EVENT) return (start.getType() == StateType.TARGET) == (end.getType() == StateType.TARGET);
 		
 		Boolean matching = null;
@@ -973,7 +1031,7 @@ public class HiddenMarkovModel {
 	}
 	//void split()
 	
-	private List<HMMState> getAllHeads() {
+	protected List<HMMState> getAllHeads() {
 		List<HMMState> out = new ArrayList<HMMState>();
 		
 		out.addAll(prefixStateHeads);
@@ -991,8 +1049,12 @@ public class HiddenMarkovModel {
 		  || s.equals(this.start) || s.equals(this.retargetSuffix)) return null;
 		
 		for (HMMState head : getAllHeads()) {
-			if (head.getLineOfSameType().contains(s)) return head;
+			List<HMMState> line = head.getLineOfSameType();
+			
+			if (line.contains(s)) return head;
 		}
+		
+		if (s == start || s == retargetSuffix) return null;
 
 		throw new IllegalStateException();
 	}
@@ -1002,19 +1064,48 @@ public class HiddenMarkovModel {
 		HashMap<HMMState, HMMState> thisToCopy = new HashMap<HMMState, HMMState>();
 		
 		HiddenMarkovModel out = new HiddenMarkovModel();
+		out.states.clear();
 		
+		List<HMMState> thisHeads = this.getAllHeads();
 		for (HMMState s : states) {
 			HMMState s2 = s.shallowCopy();
 			thisToCopy.put(s, s2);
 			
+			if (s.getType() == StateType.PHI) out.start = s2;
+			if (s.getType() == StateType.RETARGET) out.retargetSuffix = s2;
+			
 			out.addState(s2);
+			if (thisHeads.contains(s)) switch (s2.getType()) {
+			case PREFIX:
+				out.prefixStateHeads.add(s2);
+				break;
+				
+			case SUFFIX:
+				out.suffixStateHeads.add(s2);
+				break;
+				
+			case TARGET:
+				out.targetStateHeads.add(s2);
+				break;
+				
+			case BACKGROUND:
+				out.backgroundStates.add(s2);
+				break;
+				
+			default:
+				throw new IllegalStateException();
+			}
+			
 		}
 		
 		out.stateHeadContexts.clear();
-		for (HMMState head : out.getAllHeads()) out.stateHeadContexts.put(head, head.hierarchyNode);
+		for (HMMState head : out.getAllHeads()) {
+			out.stateHeadContexts.put(head, head.hierarchyNode);
+		}
 		
 		for (HMMState s2 : out.states) {
 			HMMState head = out.getHead(s2);
+			if (out.getAllHeads().contains(s2)) head = null;
 			s2.replaceInvalidReferencesFromShallowCopy(thisToCopy, out.getHierarchyParent(head, s2.getType()));
 		}
 		
@@ -1037,7 +1128,7 @@ public class HiddenMarkovModel {
 		Map<String, Double> vocabCount = new HashMap<String, Double>();
 		
 		for (HMMTrainingDocument doc : trainingCorpus) {
-			for (List<String> sentence : doc.text) for (String word : sentence) {
+			for (List<String> sentence : doc.getTextIgnoringOriginal()) for (String word : sentence) {
 				if (HMMState.IGNORE_CASE) word = word.toLowerCase();
 				if (!vocabCount.containsKey(word)) vocabCount.put(word, 0.0);
 				
@@ -1052,13 +1143,13 @@ public class HiddenMarkovModel {
 		}
 	}
 	
-	public HMMState.ProbabilityTable getForwardsProbabilityTable(List<List<String>> words, List<List<TargetEvent>> events) {
-		return start.getForwardsProbabilityTable(words, events);
+	public HMMState.ProbabilityTable getForwardsProbabilityTable(List<List<String>> words, List<List<TargetEvent>> events, double totalUniqueWords) {
+		return start.getForwardsProbabilityTable(words, events, totalUniqueWords);
 	}
 	
 
-	public HMMState.ProbabilityTable getBackwardsProbabilityTable(List<List<String>> words, List<List<TargetEvent>> events) {
-		return start.getBackwardsProbabilityTable(states, words, events);
+	public HMMState.ProbabilityTable getBackwardsProbabilityTable(List<List<String>> words, List<List<TargetEvent>> events, double totalUniqueWords) {
+		return start.getBackwardsProbabilityTable(states, words, events, totalUniqueWords);
 	}
 	
 	private class XiTable {
@@ -1081,7 +1172,7 @@ public class HiddenMarkovModel {
 	
 	//technically, this can be parallelized
 	private XiTable getXiTable(List<String> words, 
-							   HMMState.ProbabilityTable forwards, HMMState.ProbabilityTable backwards) {
+							   HMMState.ProbabilityTable forwards, HMMState.ProbabilityTable backwards, double totalUniqueWords) {
 		
 
 		Map<StatePair, Map<Integer, LogProb>> results = new HashMap<StatePair, Map<Integer, LogProb>>();
@@ -1098,7 +1189,7 @@ public class HiddenMarkovModel {
 					
 					LogProb numerator = forwards.find(i,  t);
 					numerator = numerator.add(backwards.find(j, t+1));
-					numerator = numerator.add(i.getProbabilityTo(j)).add(j.getEmissionProbability(wordAtJ));
+					numerator = numerator.add(i.getProbabilityTo(j)).add(j.getEmissionProbability(wordAtJ, totalUniqueWords));
 					
 					if (numerator.getActualProbability() == 0.0) continue;
 					
@@ -1169,10 +1260,25 @@ public class HiddenMarkovModel {
 		return new LogProb(sum);
 	}
 
+	protected List<HMMState> getHeadListForType(StateType t) {
+		switch (t) {
+		case PREFIX:
+			return prefixStateHeads;
+		case SUFFIX:
+			return suffixStateHeads;
+		case BACKGROUND:
+			return backgroundStates;
+		case TARGET:
+			return targetStateHeads;
+		default:
+			throw new IllegalStateException();
+		}
+	}
+
 	
 	private static List<List<TargetEvent>> getTargetEvents(HMMTrainingDocument doc) {
 		
-		List<String> flattened = Utility.flatten(doc.text);
+		List<String> flattened = Utility.flatten(doc.getTextIgnoringOriginal());
 		List<TargetEvent> flatEvents = new ArrayList<TargetEvent>();
 		
 		for (int i=0; i<flattened.size(); i++) flatEvents.add(TargetEvent.NO_EVENT);
@@ -1215,6 +1321,21 @@ public class HiddenMarkovModel {
 		Map<HMMState, Map<String, Double>> emissionProbNumerator = new HashMap<HMMState, Map<String, Double>>();
 
 		double commonDenominator = 0.0;
+		
+
+		double totalUniqueWords;
+		double totalWordsFound = 0.0;
+		
+		Set<String> uniqueWordSet = new HashSet<String>();
+		
+		for (HMMTrainingDocument d : trainingDocs) {
+			for (List<String> sentence : d.getTextIgnoringOriginal()) for (String s : sentence) {
+				if (HMMState.IGNORE_CASE) s = s.toLowerCase();
+				uniqueWordSet.add(s);
+				totalWordsFound++;
+			}
+		}
+		totalUniqueWords = uniqueWordSet.size();
 
 		
 		for (HMMState s : states)  {
@@ -1234,22 +1355,24 @@ public class HiddenMarkovModel {
 		
 		Timer tableTimer = new Timer();
 		
-		for (HMMTrainingDocument doc : trainingDocs) {
+		for (HMMTrainingDocument fullDoc : trainingDocs) {
+			List<List<String>> doc = fullDoc.getTextIgnoringOriginal();
+			
 			int totalSize = 0;
-			for (List<String> sentence : doc.text) totalSize += sentence.size();
+			for (List<String> sentence : doc) totalSize += sentence.size();
 			
 			parseTimer.start();
-			List<String> flattenedDoc = Utility.flatten(doc.text);
+			List<String> flattenedDoc = Utility.flatten(doc);
 			
 			//do any parsing necessary
-			List<List<TargetEvent>> targetEvents = getTargetEvents(doc);
+			List<List<TargetEvent>> targetEvents = getTargetEvents(fullDoc);
 			
 			parseTimer.pause();
 			
 			tableTimer.start();
-			HMMState.ProbabilityTable forwardsTable  = this.getForwardsProbabilityTable(doc.text, targetEvents);
-			HMMState.ProbabilityTable backwardsTable = this.getBackwardsProbabilityTable(doc.text, targetEvents);
-			XiTable xiTable = this.getXiTable(flattenedDoc, forwardsTable, backwardsTable);
+			HMMState.ProbabilityTable forwardsTable  = this.getForwardsProbabilityTable(doc, targetEvents, totalUniqueWords);
+			HMMState.ProbabilityTable backwardsTable = this.getBackwardsProbabilityTable(doc, targetEvents, totalUniqueWords);
+			XiTable xiTable = this.getXiTable(flattenedDoc, forwardsTable, backwardsTable, totalUniqueWords);
 			tableTimer.pause();
 			
 			trainTimer.start();
@@ -1274,14 +1397,14 @@ public class HiddenMarkovModel {
 				emissionNumTimer.start();
 				int idx = 0;
 
-				for (List<String> sentence : doc.text) for (String str : sentence) {
+				for (List<String> sentence : doc) for (String str : sentence) {
 					
 					if (!emissionProbNumerator.containsKey(i)) emissionProbNumerator.put(i,  new HashMap<String, Double>());
 					
 					Map<String, Double> iWordProbs = emissionProbNumerator.get(i);
 					if (!iWordProbs.containsKey(str)) iWordProbs.put(str, 0.0);
 					
-					iWordProbs.put(str, gamma(i, idx, new LogProb(1.0), doc.text, forwardsTable, backwardsTable, xiTable).getActualProbability()
+					iWordProbs.put(str, gamma(i, idx, new LogProb(1.0), doc, forwardsTable, backwardsTable, xiTable).getActualProbability()
 									    + iWordProbs.get(str));
 					
 					idx++;
@@ -1294,7 +1417,7 @@ public class HiddenMarkovModel {
 			for (HMMState i : states) {
 				for (int t=1; t < totalSize; t++) {
 					gammaTimer.start();
-					commonDenominator += gamma(i, t, new LogProb(1.0), doc.text, forwardsTable, backwardsTable, xiTable).getActualProbability();
+					commonDenominator += gamma(i, t, new LogProb(1.0), doc, forwardsTable, backwardsTable, xiTable).getActualProbability();
 					gammaTimer.pause();
 				}
 			}
@@ -1341,26 +1464,14 @@ public class HiddenMarkovModel {
 		
 		this.normalizeTransitions();
 		
-		double totalWordsFound = 0.0;
-		double totalUniqueWords;
-		
-		Set<String> uniqueWordSet = new HashSet<String>();
-		
-		for (HMMTrainingDocument d : trainingDocs) {
-			for (List<String> sentence : d.text) for (String s : sentence) {
-				if (HMMState.IGNORE_CASE) s = s.toLowerCase();
-				uniqueWordSet.add(s);
-				totalWordsFound++;
-			}
-		}
-		totalUniqueWords = uniqueWordSet.size();
 		
 		this.smoothAllEmissions(totalUniqueWords, totalWordsFound);
-		this.trainEmissionLambdas(testingDocs);
+		 //this.test(trainingDocs);
+		//this.trainEmissionLambdas(trainingDocs, totalUniqueWords);
 		
 		if (printTiming) updateTimer.stopAndPrintFuncTiming("Baum-Welch update");
 		
-		
+		//return this.test(trainingDocs);
 	}
 	
 	public void baumWelchOptimize(int numSteps, List<HMMTrainingDocument> trainingDocs, List<HMMTrainingDocument> testingDocs, boolean clear, boolean printTiming) {
@@ -1381,26 +1492,26 @@ public class HiddenMarkovModel {
 		for (HMMState s : states) s.smoothTransitions();
 	}
 	
-	private void trainEmissionLambdas(List<HMMTrainingDocument> testingDocs) {
-		Map<HMMState, List<String>> emittedStrings = new HashMap<HMMState, List<String>>();
+	private void trainEmissionLambdas(List<HMMTrainingDocument> testingDocs, double totalUniqueWords) {
+		Map<HMMState, Set<String>> emittedStrings = new HashMap<HMMState, Set<String>>();
 		
 		for (HMMTrainingDocument doc : testingDocs) {
-			List<String> flattened = Utility.flatten(doc.text);
+			List<String> flattened = Utility.flatten(doc.getTextIgnoringOriginal());
 			
-			HMMState.Extraction result = start.getOptimalSequence(Utility.flatten(doc.text));
+			HMMState.Extraction result = start.getOptimalSequence(flattened, totalUniqueWords);
 			List<HMMState> path = result.path;
 			
 			for (int i=0; i<flattened.size(); i++) {
 				HMMState s = path.get(i);
 				String   w = flattened.get(i);
 				
-				emittedStrings.putIfAbsent(s, new ArrayList<String>());
+				emittedStrings.putIfAbsent(s, new HashSet<String>());
 				
 				emittedStrings.get(s).add(w);
 			}
 		}
 		
-		for (HMMState h : emittedStrings.keySet()) h.updateLambdas(emittedStrings.get(h));
+		for (HMMState h : emittedStrings.keySet()) h.updateLambdas(emittedStrings.get(h), totalUniqueWords);
 	}
 
 	private void replaceConnection(HMMState head, boolean addSelfCycles, StateType[] typesThatTailConnectsTo) {
@@ -1441,7 +1552,7 @@ public class HiddenMarkovModel {
 				break;
 				
 			default:
-				throw new IllegalArgumentException();
+				throw new IllegalArgumentException("Unexpected StateType in replaceConnections");
 			}
 		}
 	}
@@ -1465,8 +1576,8 @@ public class HiddenMarkovModel {
 	}
 	
 	public void addHead(StateType t) {
-		HMMState s = new HMMState(t, getHierarchyParent(null, t));
-		stateHeadContexts.put(s, s.hierarchyNode);
+		HMMState s = new HMMState(t, new StateHierarchy(getHierarchyParent(null, t), t.toString()+"_HEAD"));
+		stateHeadContexts.put(s, s.hierarchyNode.parent);
 		
 		Set<HMMState> visited = new HashSet<HMMState>();
 		
@@ -1506,7 +1617,7 @@ public class HiddenMarkovModel {
 			break;
 			
 		default:
-			throw new IllegalArgumentException();
+			throw new IllegalArgumentException("Unexpected StateType in addHead");
 		}
 	}
 	
@@ -1528,43 +1639,120 @@ public class HiddenMarkovModel {
 		states.add(s);
 	}
 	
-	private String concatenateExtraction(List<String> tokens) {
-		if (tokens.size() == 0) return "";
+	private double estimateVocabularySize(List<HMMTrainingDocument> docs, Object ignoredValueToDisambiguate) {
+		Set<String> uniqueWordsSeen = new HashSet<String>();
 		
-		String out = "";
+		for (HMMTrainingDocument doc : docs) {
+			for (List<ConvertedWord> sentence : doc.text) for (ConvertedWord w : sentence) uniqueWordsSeen.add(w.get());
+		}
+
+		for (HMMState s : states) for (String str : s.getEmissionWords()) {
+			uniqueWordsSeen.add(str);
+		}
 		
-		for (String s : tokens) out += s + " ";
-		return out.substring(0, out.length()-1);
+		return uniqueWordsSeen.size();
+		
 	}
 	
-	public Set<String> extract(List<String> doc, boolean extractSingle) {
-		HMMState.Extraction result = start.getOptimalSequence(doc);
+	private double estimateVocabularySize(List<ConvertedWord> doc) {
+		Set<String> uniqueWordsSeen = new HashSet<String>();
+		
+		for (ConvertedWord w : doc) uniqueWordsSeen.add(w.get());
+		
+		for (HMMState s : states) for (String str : s.getEmissionWords()) {
+			uniqueWordsSeen.add(str);
+		}
+		
+		return uniqueWordsSeen.size();
+	}
+	
+	private double test(List<HMMTrainingDocument> trainingFiles) {
+		double correctNonTargets = 0.001;
+		double correctTargets = 0.001;
+		double guessedTargets = 0.001;
+		double guessedNonTargets = 0.001;
+		double expectedNonTargets = 0.001;
+		double expectedTargets = 0.001;
+		
+		double vocabSize = estimateVocabularySize(trainingFiles, null);
+		
+		
+		for (HMMTrainingDocument doc : trainingFiles) {
+			List<String> flattened = Utility.flatten(doc.getTextIgnoringOriginal());
+			HMMState.Extraction actual = start.getOptimalSequence(flattened, vocabSize);
+			List<TargetEvent> expected = Utility.flatten(getTargetEvents(doc));
+			
+			boolean extracting = false;
+			for (int i=0; i < flattened.size(); i++) {
+				HMMState 	state   = actual.path.get(i);
+				TargetEvent event   = expected.get(i);
+				
+				if (event == TargetEvent.ENTER) extracting = true;
+				if (event == TargetEvent.EXIT)  extracting = false;
+				
+				if (extracting) {
+					if (state.getType() == StateType.TARGET) correctTargets++;
+					expectedTargets++;
+				}
+				else {
+					if (state.getType() != StateType.TARGET) correctNonTargets++;
+					expectedNonTargets++;
+				}
+				
+				if (state.getType() == StateType.TARGET) guessedTargets++;
+				else guessedNonTargets++;
+				
+			}
+		}
+		
+		double targetPrecision = correctTargets / guessedTargets;
+		double targetRecall    = correctTargets / expectedTargets;
+		double ntPrecision = correctNonTargets / guessedNonTargets;
+		double ntRecall    = correctNonTargets / expectedNonTargets;
+		
+		double targetF1 = 2*(targetPrecision * targetRecall) / (targetPrecision + targetRecall);
+		double ntF1     = 2*(ntPrecision * ntRecall) / (ntPrecision + ntRecall);
+		
+		if (Double.isNaN(targetF1) && Double.isNaN(ntF1)) throw new IllegalStateException("NaN found for both targetF1 and nonTargetF1 in test()");
+		if (Double.isNaN(targetF1)) return 2*ntF1;
+		else if (Double.isNaN(ntF1)) return 2*targetF1;
+		
+		else return targetF1 + ntF1;
+		
+	}
+	
+	public Set<ConvertedWord> extract(List<ConvertedWord> doc, boolean extractSingle, Function<List<ConvertedWord>, ConvertedWord> concatFunc) {
+		List<String> convertedDoc = new ArrayList<String>();
+		for (ConvertedWord w : doc) convertedDoc.add(w.get());
+		double totalUniqueWords = estimateVocabularySize(doc);
+		
+		HMMState.Extraction result = start.getOptimalSequence(convertedDoc, totalUniqueWords);
 		List<HMMState> path = result.path;
 		
-		Set<String> allCapturedTokens = new HashSet<String>();
+		Set<ConvertedWord> allCapturedTokens = new HashSet<ConvertedWord>();
 		
 		boolean capturing = false;
-		List<String> capturedTokens = new ArrayList<String>();
+		List<ConvertedWord> capturingTokens = new ArrayList<ConvertedWord>();
 		
 		for (int i=0; i<path.size(); i++) {
 			capturing = path.get(i).getType() == StateType.TARGET;
 			
 			if (capturing) {
-				capturedTokens.add(doc.get(i));
+				capturingTokens.add(doc.get(i));
 			}
 			else {
-				allCapturedTokens.add(concatenateExtraction(capturedTokens));
-				capturedTokens.clear();
+				if (capturingTokens.size() > 0) allCapturedTokens.add(concatFunc.apply(capturingTokens));
+				capturingTokens.clear();
 			}
 				
 		}
 		
-		if (capturing) allCapturedTokens.add(concatenateExtraction(capturedTokens));
-		allCapturedTokens.remove("");
+		if (capturing && capturingTokens.size() > 0) allCapturedTokens.add(concatFunc.apply(capturingTokens));
+
 		
 		if (extractSingle) {
-			Set<String> out = new HashSet<String>();
-			for (String s : allCapturedTokens) {
+			Set<ConvertedWord> out = new HashSet<ConvertedWord>();
+			for (ConvertedWord s : allCapturedTokens) {
 				out.add(s);
 				break;
 			}
@@ -1575,10 +1763,10 @@ public class HiddenMarkovModel {
 		return allCapturedTokens;
 	}
 	
-	public List<Set<String>> extractAll(List<List<List<String>>> corpus, boolean extractSingle) {
-		List<Set<String>> out = new ArrayList<Set<String>>();
-		for (List<List<String>> doc : corpus) {
-			out.add(extract(Utility.flatten(doc), extractSingle));
+	public List<Set<ConvertedWord>> extractAll(List<List<List<ConvertedWord>>> corpus, boolean extractSingle, Function<List<ConvertedWord>, ConvertedWord> concatFunc) {
+		List<Set<ConvertedWord>> out = new ArrayList<Set<ConvertedWord>>();
+		for (List<List<ConvertedWord>> doc : corpus) {
+			out.add(extract(Utility.flatten(doc), extractSingle, concatFunc));
 		}
 		return out;
 	}

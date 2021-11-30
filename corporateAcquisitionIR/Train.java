@@ -5,13 +5,16 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectOutputStream;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 
 import edu.stanford.nlp.ie.AbstractSequenceClassifier;
 import edu.stanford.nlp.ie.crf.CRFClassifier;
+import edu.stanford.nlp.ling.CoreAnnotations;
 import edu.stanford.nlp.ling.CoreLabel;
 import edu.stanford.nlp.ling.HasWord;
 import edu.stanford.nlp.ling.TaggedWord;
@@ -39,9 +42,26 @@ public class Train {
 		return out;
 	}
 	
+	static class Score {
+		double fScore;
+		double correctExtractions;
+		double correctNonAnswers;
+		double incorrectNonAnswers;
+		
+		public Score(double f, double c, double na, double icNa) {
+			fScore = f;
+			correctExtractions = c;
+			correctNonAnswers = na;
+			incorrectNonAnswers = icNa;
+		}
+	}
 	
-	public static double score(HiddenMarkovModel model, List<String> tokenizedDoc, ExtractedResult expected, ResultField f, boolean verbose) {
-		Set<String> results = model.extract(tokenizedDoc, ExtractedResult.fieldIsSingular(f));
+	public static Score score(HiddenMarkovModel model, List<ConvertedWord> tokenizedDoc, ExtractedResult expected, ResultField f, boolean verbose) {
+		Set<ConvertedWord> convertedResults = model.extract(tokenizedDoc, ExtractedResult.fieldIsSingular(f), (s) -> {return ConvertedWord.concatenate(s);});
+		
+		Set<String> results = new HashSet<String>();
+		
+		for (ConvertedWord w : convertedResults) results.add(w.getOriginal());
 		
 		Set<String> expectedResults = new HashSet<String>();
 		
@@ -60,7 +80,7 @@ public class Train {
 
 		if (verbose) {
 			System.out.println(" Testing model on doc:\n");
-			for (String s : tokenizedDoc) System.out.print(s+" ");
+			for (ConvertedWord s : tokenizedDoc) System.out.print(s.toString()+" ");
 			System.out.println();
 			System.out.println(" Expected "+totalExpected+" results, got "+totalActual+" results. ");
 		}
@@ -68,11 +88,11 @@ public class Train {
 		
 		if (totalExpected == 0 && totalActual == 0) {
 			if (verbose) System.out.println(" F score is 1.0 (correctly didn't identify)");
-			return 1.0;
+			return new Score(1.0, 0.0, 1.0, 0.0);
 		}
 		if (totalActual == 0 ^ totalExpected == 0) {
 			if (verbose) System.out.println(" F score is 0.0 (one set is empty, other isn't)");
-			return 0.0;
+			return new Score(0.0, 0.0, 0.0, (totalActual == 0 ? 1 : 0));
 		}
 		
 		double precision = totalCorrect / totalGuesses;
@@ -82,33 +102,35 @@ public class Train {
 		
 		if (Double.isNaN(fScore)) fScore = 0;
 		
-		if (results.size() > 5) {
-			System.out.print("");
-		}
-		
-		
 		if (verbose) System.out.println(" F score is "+fScore+", precision = "+precision+" and recall = "+recall);
 		if (fScore > 0 && verbose) {
 			System.out.println("A hit!");
 		}
-		return fScore;
+		return new Score(fScore, totalCorrect, 0.0, 0.0);
 		
 	}
 	
-	public static double scoreAll(HiddenMarkovModel model, List<List<List<String>>> trainingCorpus, List<ExtractedResult> expectedResults, ResultField f, boolean verbose) {
+	public static double scoreAll(HiddenMarkovModel model, List<List<List<ConvertedWord>>> trainingCorpus, List<ExtractedResult> expectedResults, ResultField f, boolean verbose) {
 		
 		double totalFScore = 0.0;
+		double correctExtractions = 0.0;
+		double correctNonAnswers = 0.0;
+		double incorrectNonAnswers = 0.0;
+		
 		for (int i=0; i<trainingCorpus.size(); i++) {
-			List<String> trainingInstance = Utility.flatten(trainingCorpus.get(i));
+			List<ConvertedWord> trainingInstance = Utility.flatten(trainingCorpus.get(i));
 			ExtractedResult expected = expectedResults.get(i);
 			
-			double fScore = score(model, trainingInstance, expected, f, verbose);
+			Score score = score(model, trainingInstance, expected, f, verbose);
 			
-			totalFScore += fScore;
-			
+			totalFScore += score.fScore;
+			correctExtractions += score.correctExtractions;
+			correctNonAnswers += score.correctNonAnswers;
+			incorrectNonAnswers += score.incorrectNonAnswers;
 		}
 		
-		if (verbose) System.out.println("Total F score: "+totalFScore);
+		if (verbose) System.out.println("Total F score: "+totalFScore+"/"+trainingCorpus.size()+", successfully extracted "+correctExtractions+" events ("+correctNonAnswers+" correct non-answers, "
+										+incorrectNonAnswers+" incorrect)");
 		return totalFScore;
 	}
 	
@@ -130,7 +152,6 @@ public class Train {
 		
 		List<List<String>> keyFilepathList;
 		
-		HiddenMarkovModel basic = HiddenMarkovModel.generateBasicModel();
 		//AbstractSequenceClassifier<CoreLabel> classifier;
 
 		try {
@@ -166,22 +187,15 @@ public class Train {
 			return out;
 		};
 		
-		Function<List<List<String>>, List<List<String>>> tokenizeAugment = (s) -> {
+		
+		
+		Function<List<List<String>>, List<List<ConvertedWord>>> tokenizeAugment = (s) -> {
 			List<List<HasWord>> hwList = MaxentTagger.tokenizeText(new ListListReader(s));
 			
 			List<List<TaggedWord>> tagged = tagAugment(hwList, tagger);
 			List<List<CoreLabel>> ner = nerAugment(tagged, classifier);
 			
-			List<List<String>> out = new ArrayList<List<String>>();
-			
-			for (List<HasWord> l : hwList) {
-				out.add(new ArrayList<String>());
-				for (HasWord h : l) {
-					out.get(out.size()-1).add(h.toString());
-				}
-			}
-			
-			return out;
+			return ConvertedWord.convertParsedFile(ner);
 		};
 		
 		Function<String, List<String>> tokenizeSingle = (s) -> {
@@ -216,110 +230,59 @@ public class Train {
 		}
 		
 		System.out.println("All training files loaded");
+		List<List<List<ConvertedWord>>> convertedCorpus = new ArrayList<List<List<ConvertedWord>>>();
 
+		Timer parseTimer = new Timer();
+		parseTimer.start();
+		for (List<List<String>> doc : allTrainingFiles) {
+			convertedCorpus.add(tokenizeAugment.apply(doc));
+		}
+		parseTimer.stopAndPrintFuncTiming("parsing training data");
 		
 		boolean tried = false;
+		Map<ResultField, Double> prevScores = new HashMap<ResultField, Double>();
+		Map<ResultField, Double> postScores = new HashMap<ResultField, Double>();
+		
+		
 		for (ResultField f : ResultField.values()) {
-			List<HMMTrainingDocument> allHMMTrainingFiles = HMMTrainingDocument.makeFromCorpusForField(allTrainingFiles, allKeyFiles, f, tokenizeSingle, tokenize);
+			List<HMMTrainingDocument> allHMMTrainingFiles = HMMTrainingDocument.makeFromCorpusForField(convertedCorpus, allKeyFiles, f, tokenizeSingle);
+
 			
 			int size = allHMMTrainingFiles.size();
 			int halfSize = size/2;
-			
+
+			HiddenMarkovModel basic = HiddenMarkovModel.generateBasicModel();
 			List<HMMTrainingDocument> train = allHMMTrainingFiles.subList(0, halfSize);
 			List<HMMTrainingDocument> test = allHMMTrainingFiles.subList(halfSize, size);
-			if (!tried && f == ResultField.ACQUIRED) {
-				//basic.extract(Utility.flatten(test.get(0).text), ExtractedResult.fieldIsSingular(f));
-				scoreAll(basic, allTrainingFiles.subList(halfSize, size), allKeyFiles.subList(halfSize, size), f, true);
-				basic.baumWelchOptimize(10, train, test, true, true);
-				scoreAll(basic, allTrainingFiles.subList(halfSize, size), allKeyFiles.subList(halfSize, size), f, true);
-				//basic.extract(Utility.flatten(test.get(0).text), ExtractedResult.fieldIsSingular(f));
-			}
-		}
-		
-		
-		/*List<List<String>> shortTrainFilepath = new ArrayList<List<String>>();
-		List<List<String>> shortKeyFilepath = new ArrayList<List<String>>();
-		
-		for (int i=0; i<35; i++) {
-			shortTrainFilepath.add(trainFilepathList.get(i));
-			shortKeyFilepath.add(keyFilepathList.get(i));
-		}
-		
-		trainFilepathList = shortTrainFilepath;
-		keyFilepathList = shortKeyFilepath;*/
-		
-		
-		/*
-		InformationExtractor model = new InformationExtractor();
-
-		TrainingData accumulated = new TrainingData();
-		
-		try {
-			for (int i=0; i<trainFilepathList.size(); i++) {
-				List<String> trainList = trainFilepathList.get(i);
-				List<String> keyList = keyFilepathList.get(i);
-				
-				for (int j=0; j<trainList.size(); j++) {
-					String trainPath = trainList.get(j);
-					String keyPath = keyList.get(j);
-					
-					List<List<String>> trainFile = Utility.readFile(trainPath, false);
-					List<List<String>> keyFile = Utility.readFile(keyPath, false);
-					
-					TrainingData d = model.trainOn(trainFile, keyFile);
-					System.out.println("done with "+trainPath);
-					accumulated.add(d);
-				}
-			}
-		}
-		catch (FileNotFoundException e) {
-			System.out.println("FileNotFoundException while loading file in doclist:\n"+e.getMessage());
-			return;
-		}
-		
-		System.out.println("done with first read");
-		
-		try {
-			for (int i=0; i<trainFilepathList.size(); i++) {
-				List<String> trainList = trainFilepathList.get(i);
-				List<String> keyList = keyFilepathList.get(i);
-
-				for (int j=0; j<trainList.size(); j++) {
-					String trainPath = trainList.get(j);
-					String keyPath = keyList.get(j);
-					
-					List<List<String>> trainFile = Utility.readFile(trainPath, false);
-					List<List<String>> keyFile = Utility.readFile(keyPath, false);
-					
-					model.testPatterns(trainFile, keyFile, accumulated);
-					System.out.println("done testing "+trainPath);
-				}
-			}
-		}
-		catch (FileNotFoundException e) {
-			System.out.println("FileNotFoundException while loading file in doclist:\n"+e.getMessage());
-			return;
-		}
-		
-		final double MIN = 3.1;
-		final double REQ_PROB = -1;
-		
-		System.out.println("removing bad rules; at least "+MIN+" occurences, and precision >="+REQ_PROB);
-		System.out.println("Started with "+accumulated.size()+" rules");
-		accumulated.eraseBadRules(REQ_PROB, MIN);
-		System.out.println("Ended with "+accumulated.size()+" rules");
-		
-		try {
-			ObjectOutputStream objOut = new ObjectOutputStream(new FileOutputStream("./rules.ser"));
 			
-			objOut.writeObject(accumulated);
+			List<List<List<ConvertedWord>>> test2 = new ArrayList<List<List<ConvertedWord>>>();
+			for (HMMTrainingDocument d : test) {
+				test2.add(d.text);
+			}
+
+			Function<HiddenMarkovModel, Double> scorer = (model) -> {
+				return scoreAll(model, test2, allKeyFiles.subList(halfSize, size), f, false);
+			};
 			
-			objOut.close();
+			boolean verbose = true;
+			
+			//if (!tried && f == ResultField.ACQUIRED) {
+				//basic.extract(Utility.flatten(test.get(0).text), ExtractedResult.fieldIsSingular(f));
+			double prev = scoreAll(basic, test2, allKeyFiles.subList(halfSize, size), f, verbose);
+			
+			HiddenMarkovModel best = HiddenMarkovModelGenerator.evolveOptimal(train, test, scorer);
+			//basic.baumWelchOptimize(10, train, test, true, false);
+			double post  = scoreAll(basic, test2, allKeyFiles.subList(halfSize, size), f, verbose);
+			
+			prevScores.put(f, prev);
+			postScores.put(f, post);
+				//basic.extract(Utility.flatten(test.get(0).text), ExtractedResult.fieldIsSingular(f));
+			//}
 		}
-		catch (Exception e) {
-			System.out.println("Failed to serialize test data:\n"+e.getMessage());
-			return;
+		
+		System.out.println("Final scores:\n");
+		for (ResultField f : ResultField.values()) {
+			System.out.println(f.toString()+"\t"+prevScores.get(f) + "\t-> "+postScores.get(f));
 		}
-		*/
 	}
 }
