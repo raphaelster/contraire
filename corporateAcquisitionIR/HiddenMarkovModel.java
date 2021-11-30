@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.Stack;
+import java.util.function.Supplier;
 
 enum StateType {
 	PREFIX,
@@ -26,7 +27,200 @@ class StateHierarchy {
 	public StateHierarchy parent;
 	public Set<StateHierarchy> children;
 	public HMMState value;
+	private boolean probabilityIsUniform;
+	private Map<String, List<Double>> memoizedEmissions;
+	private String name;
 	
+	List<Double> lambdas;
+
+	public StateHierarchy(StateHierarchy _parent, String _name) {
+		children = new HashSet<StateHierarchy>();
+		value = null;
+		lambdas = null;
+		probabilityIsUniform = false;
+		memoizedEmissions = new HashMap<String, List<Double>>();
+		name = _name;
+		
+		setParent(_parent);
+	}
+	
+	
+	public StateHierarchy(StateHierarchy _parent, HMMState _value) {
+		children = null;
+		value = _value;
+		lambdas = new ArrayList<Double>();
+		probabilityIsUniform = false;
+		memoizedEmissions = new HashMap<String, List<Double>>();
+		
+		name = "(PARENTOF "+_value.toString()+")";
+
+		setParent(_parent);
+	}
+	
+	
+	public void setParent(StateHierarchy p) {
+		parent = p;
+		if (parent == null) return;
+		
+		
+		parent.children.add(this);
+		lambdas = new ArrayList<Double>();
+		for (StateHierarchy top = this; top != null; top = top.parent) {
+			lambdas.add(1.0);
+		}
+		
+		normalizeLambdas();
+	}
+	public void normalizeLambdas() {
+		double sum = 0.0;
+		for (Double d : lambdas) sum += d;
+		
+		for (int i=0; i<lambdas.size(); i++)  lambdas.set(i, lambdas.get(i) / sum);
+		
+	}
+	
+	void optimizeLambdaStep(HMMState child, List<String> emissionsSeenForThisState) {
+		normalizeLambdas();
+		
+		List<Double> priorLambdas = new ArrayList<Double>();
+
+		while (true) {
+			priorLambdas.clear();
+			priorLambdas.addAll(lambdas);
+			
+			List<Double> betas = new ArrayList<Double>();
+			for (int i=0; i<lambdas.size(); i++) betas.add(0.0);
+			
+			for (String word : emissionsSeenForThisState) {
+				List<Double> emissions = getEmissionVector(word);
+				
+				double total = 0.0;
+				for (int nth = 0; nth < lambdas.size(); nth++) total += lambdas.get(nth) * emissions.get(nth); 
+				
+				for (int nth = 0; nth < lambdas.size(); nth++) {
+					double preSumValue = lambdas.get(nth) * emissions.get(nth) / total; 
+					
+					betas.set(nth, betas.get(nth) + preSumValue);
+				}
+			}
+			
+			for (int i=0; i<lambdas.size(); i++) lambdas.set(i, betas.get(i));
+			
+			normalizeLambdas();
+			
+			double changeInLambdas = 0.0;
+			
+			for (int i=0; i < lambdas.size(); i++) {
+				changeInLambdas += Math.pow(lambdas.get(i) - priorLambdas.get(i), 2); 
+			}
+			
+			final double CHANGE_THRESHOLD = Math.pow(10, -5);
+			if (changeInLambdas <= CHANGE_THRESHOLD) break;
+		}
+	}
+	
+	public String toString() {
+		return "SHNode_"+name;
+	}
+	
+	StateHierarchy getRoot() {
+		StateHierarchy top = this;
+		
+		while (top.parent != null) top = top.parent;
+		
+		return top;
+	}
+	
+	Set<StateHierarchy> getTree() {
+		StateHierarchy p = getRoot();
+		
+		Set<StateHierarchy> visited = new HashSet<StateHierarchy>();
+		Stack<StateHierarchy> traversal = new Stack<StateHierarchy>();
+		traversal.add(p);
+
+		while (traversal.size() > 0) {
+			StateHierarchy top = traversal.pop();
+			visited.add(top);
+			if (top.children != null) for (StateHierarchy h : top.children) {
+				if (visited.contains(h)) throw new IllegalStateException("found cycle in assumed acyclic StateHierarchy structure");
+				traversal.add(h);
+			}
+		}
+		
+		return visited;
+	}
+	
+	public void invalidateCache() {
+		for (StateHierarchy h : getTree()) h.memoizedEmissions.clear();
+	}
+	
+	Set<StateHierarchy> getLeaves() {
+		Set<StateHierarchy> visited = new HashSet<StateHierarchy>();
+		Set<StateHierarchy> leaves = new HashSet<StateHierarchy>();
+		
+		Stack<StateHierarchy> traversal = new Stack<StateHierarchy>();
+		traversal.add(this);
+		
+		while (traversal.size() > 0) {
+			StateHierarchy top = traversal.pop();
+			visited.add(top);
+			if (top.children != null) for (StateHierarchy h : top.children) {
+				if (visited.contains(h)) throw new IllegalStateException("found cycle in assumed acyclic StateHierarchy structure");
+				traversal.add(h);
+			}
+			else leaves.add(top);
+		}
+		
+		return leaves;
+	}
+	
+	public void setUsingUniformDistribution(boolean b) {
+		this.probabilityIsUniform = b;
+	}
+	
+	private List<Double> getEmissionVector(String word) {
+		if (memoizedEmissions.containsKey(word)) return memoizedEmissions.get(word);
+		
+		List<Double> out = new ArrayList<Double>();
+		
+		for (StateHierarchy top = this; top != null; top = top.parent) {
+			if (top.probabilityIsUniform) {
+				out.add(1.0);
+				continue;
+			}
+			
+			Set<StateHierarchy> leaves = top.getLeaves();
+			
+			
+			double totalLeafProbability = 1.0 * leaves.size();
+			double sum = 0.0;
+			for (StateHierarchy leaf : leaves) {
+				LogProb cur = leaf.value.getEmissionProbability(word, true);
+				sum += cur.getActualProbability();
+			}
+			sum /= totalLeafProbability;
+			out.add(sum); 
+		}
+		
+		memoizedEmissions.put(word, out);
+		return out;
+	}
+	
+	LogProb getProbability(String word) {
+		if (this.probabilityIsUniform) return new LogProb(1.0);
+		
+		List<Double> emissionVec = getEmissionVector(word);
+		
+		if (emissionVec.size() != lambdas.size()) throw new IllegalStateException("StateHierarchy: |lambdas| != |emissionVector|");
+		
+		double finalProb = 0.0;
+		
+		for (int i=0; i<emissionVec.size(); i++) {
+			finalProb += emissionVec.get(i) * lambdas.get(i);
+		}
+		
+		return new LogProb(finalProb);
+	}
 	
 }
 
@@ -41,14 +235,17 @@ class HMMState {
 	private StateType type;
 	private int id;
 	
+	StateHierarchy hierarchyNode;
+	
 	LogProb defaultEmissionProbability;
 	
-	public HMMState(StateType t) {
+	public HMMState(StateType t, StateHierarchy parent) {
 		transitions = new HashMap<HMMState, LogProb>();
 		emissions = new HashMap<String, LogProb>();
 		parents = new HashSet<HMMState>();
 		defaultEmissionProbability = new LogProb(1.0);
 		type = t;
+		hierarchyNode = new StateHierarchy(parent, this);
 		id = maxID++;
 	}
 	
@@ -79,6 +276,20 @@ class HMMState {
 		return out;
 	}
 	
+	class Extraction {
+		public List<HMMState> path;
+		public LogProb chance;
+		
+		public Extraction() {
+			path = new ArrayList<HMMState>();
+			chance = new LogProb(0);
+		}
+		
+		public Extraction(List<HMMState> p, LogProb c) {
+			path = p; chance = c;
+		}
+	}
+	
 	public String toString() {
 		return getToStringWithoutChildren();
 		
@@ -94,8 +305,9 @@ class HMMState {
 		return out + "]";*/
 	}
 	
+	//need to recreate hierarchy
 	public HMMState shallowCopy() {
-		HMMState out = new HMMState(type);
+		HMMState out = new HMMState(type, null);
 		out.emissions.putAll(emissions);
 		out.transitions.putAll(transitions);
 		out.parents.addAll(parents);
@@ -103,15 +315,26 @@ class HMMState {
 		return out;
 	}
 	
-	public LogProb getEmissionProbability(String word) {
+	public LogProb getEmissionProbability(String word, boolean ignoreHierarchy) {
 		if (IGNORE_CASE) word = word.toLowerCase();
+		
+
+		if (!ignoreHierarchy) return hierarchyNode.getProbability(word);
 		
 		if (word.equals(HiddenMarkovModel.PHI_TOKEN) && this.type != StateType.PHI) {
 			return new LogProb(0);
 		}
 		
-		if (emissions.containsKey(word)) return emissions.get(word);
-		return defaultEmissionProbability;
+		LogProb baseEmissionProb = null;
+		
+		if (emissions.containsKey(word)) baseEmissionProb = emissions.get(word);
+		else baseEmissionProb = defaultEmissionProbability;
+		
+		return baseEmissionProb;
+	}
+	
+	public LogProb getEmissionProbability(String word) {
+		return getEmissionProbability(word, false);
 	}
 	
 	public LogProb getProbabilityTo(HMMState next) {
@@ -150,7 +373,8 @@ class HMMState {
 	void smoothEmissions(double totalUniqueWords, double totalWords) {
 		//(emission(s) + addedValue) / (totalProbability + addedValue*vocabSize)
 		// addedValue*vocabSize = 1, when addedValue = 1/vocabSize
-
+		hierarchyNode.invalidateCache();
+		
 		Set<String> keysToRemove = new HashSet<String>();
 
 		for (String s : emissions.keySet()) {
@@ -214,8 +438,12 @@ class HMMState {
 		
 	}
 	
-	public List<HMMState> getOptimalSequence(List<String> doc) {
-		if (doc.size() == 0) return new ArrayList<HMMState>();
+	void updateLambdas(List<String> testEmissions) {
+		hierarchyNode.optimizeLambdaStep(this, testEmissions);
+	}
+	
+	public Extraction getOptimalSequence(List<String> doc) {
+		if (doc.size() == 0) return new Extraction();
 		
 		class ProbBackPointer {
 			public LogProb prob;
@@ -256,7 +484,7 @@ class HMMState {
 					
 					LogProb transProb = before.getProbabilityTo(after);
 					LogProb emissionProb = after.getEmissionProbability(word);
-					prob.add(transProb).add(emissionProb);
+					prob = prob.add(transProb).add(emissionProb);
 					int bestID = Integer.MAX_VALUE;	//use ID as tiebreaker, since the hash map ordering is actually random
 					if (best.backPointers.size() > 0) bestID = best.backPointers.get(best.backPointers.size()-1).id;
 					
@@ -281,7 +509,7 @@ class HMMState {
 			}
 		}
 		
-		return best.backPointers;
+		return new Extraction(best.backPointers, best.prob);
 	}
 
 	private static void renormalizeColumn(Map<HMMState, LogProb> col) {
@@ -493,8 +721,9 @@ class HMMState {
 		}
 	}
 	
-	public void replaceTransitionReferences(Map<HMMState, HMMState> oldToNew) {
+	public void replaceInvalidReferencesFromShallowCopy(Map<HMMState, HMMState> oldToNew, StateHierarchy newParent) {
 		Set<HMMState> oldTransitions = transitions.keySet();
+		hierarchyNode.setParent(newParent);
 		
 		for (HMMState oldState : oldTransitions) {
 			HMMState newState = oldToNew.get(oldState);
@@ -644,17 +873,38 @@ class HMMState {
 
 public class HiddenMarkovModel {
 	private HashSet<HMMState> states;
-	HMMState start;
-	HMMState retargetSuffix;
+	
+	private HMMState start;
+	private HMMState retargetSuffix;
 	
 	private List<HMMState> backgroundStates;
 	private List<HMMState> prefixStateHeads;
 	private List<HMMState> suffixStateHeads;
 	private List<HMMState> targetStateHeads;
 	
+	private StateHierarchy uniform, global, context;
+	private StateHierarchy backgroundGlobal, prefixGlobal, suffixGlobal, targetGlobal; 
+	
+	private Map<HMMState, StateHierarchy> stateHeadContexts;
+	
 	public static final String PHI_TOKEN = ".~!phi!~.";
 	public static final boolean RENORMALIZE = true;
 
+	private void initHierarchy() {
+
+		uniform = new StateHierarchy(null, "UNIFORM");
+		global = new StateHierarchy(uniform, "GLOBAL");
+		context = new StateHierarchy(global, "CONTEXT");
+		
+		backgroundGlobal = new StateHierarchy(context, "BACK_GLOBAL");
+		prefixGlobal = new StateHierarchy(context, "PREF_GLOBAL");
+		suffixGlobal = new StateHierarchy(context, "SUFF_GLOBAL");
+		targetGlobal = new StateHierarchy(global, "TARG_GLOBAL");
+	
+
+		uniform.setUsingUniformDistribution(true);
+	}
+	
 	public HiddenMarkovModel() {
 		states = new HashSet<HMMState>();
 
@@ -662,15 +912,43 @@ public class HiddenMarkovModel {
 		prefixStateHeads = new ArrayList<HMMState>();
 		suffixStateHeads = new ArrayList<HMMState>();
 		targetStateHeads = new ArrayList<HMMState>();
+		stateHeadContexts = new HashMap<HMMState, StateHierarchy>();
 		
-		start = new HMMState(StateType.PHI);
-		retargetSuffix = new HMMState(StateType.RETARGET);
+		initHierarchy();
+		
+		start = new HMMState(StateType.PHI, getHierarchyParent(null, StateType.PHI));
+		retargetSuffix = new HMMState(StateType.RETARGET, getHierarchyParent(null, StateType.RETARGET));
 		addState(start);
 		addState(retargetSuffix);
 	}
 	
+	private StateHierarchy getHierarchyParent(HMMState headNode, StateType thisType) {
+		if (headNode != null && stateHeadContexts.get(headNode) != null) {
+			return stateHeadContexts.get(headNode);
+		}
+		if (headNode != null && stateHeadContexts.get(headNode) == null) throw new IllegalStateException();
+		
+		
+		//if headNode == null, then assuming the new node will be a head node
+		switch (thisType) {
+		case PREFIX:
+			return prefixGlobal;
+		case SUFFIX:
+			return suffixGlobal;
+		case TARGET:
+			return targetGlobal;
+		case BACKGROUND:
+			return backgroundGlobal;
+		case PHI:
+		case RETARGET:
+			return global;
+		default:
+			throw new IllegalStateException();
+		}
+	}
+	
 	void lengthen(HMMState trg) {
-		HMMState newState = new HMMState(trg.getType());
+		HMMState newState = new HMMState(trg.getType(), getHierarchyParent(trg, trg.getType()));
 		
 		newState.stealTransitions(trg);
 		trg.addChild(newState, new LogProb(1.0));
@@ -695,6 +973,30 @@ public class HiddenMarkovModel {
 	}
 	//void split()
 	
+	private List<HMMState> getAllHeads() {
+		List<HMMState> out = new ArrayList<HMMState>();
+		
+		out.addAll(prefixStateHeads);
+		out.addAll(suffixStateHeads);
+		out.addAll(targetStateHeads);
+		out.addAll(backgroundStates);
+		
+		return out;
+	}
+	
+	private HMMState getHead(HMMState s) {
+		//this is slow, but since the number of states will at most be in the double digits, O(N^2) is fine)
+		if (prefixStateHeads.contains(s) || suffixStateHeads.contains(s)
+		  || targetStateHeads.contains(s) || backgroundStates.contains(s)
+		  || s.equals(this.start) || s.equals(this.retargetSuffix)) return null;
+		
+		for (HMMState head : getAllHeads()) {
+			if (head.getLineOfSameType().contains(s)) return head;
+		}
+
+		throw new IllegalStateException();
+	}
+	
 	
 	public HiddenMarkovModel deepCopy() {
 		HashMap<HMMState, HMMState> thisToCopy = new HashMap<HMMState, HMMState>();
@@ -708,8 +1010,12 @@ public class HiddenMarkovModel {
 			out.addState(s2);
 		}
 		
+		out.stateHeadContexts.clear();
+		for (HMMState head : out.getAllHeads()) out.stateHeadContexts.put(head, head.hierarchyNode);
+		
 		for (HMMState s2 : out.states) {
-			s2.replaceTransitionReferences(thisToCopy);
+			HMMState head = out.getHead(s2);
+			s2.replaceInvalidReferencesFromShallowCopy(thisToCopy, out.getHierarchyParent(head, s2.getType()));
 		}
 		
 		return out;
@@ -861,14 +1167,6 @@ public class HiddenMarkovModel {
 			//sum += xi(i, s, t, den, words, events, forwards, backwards).getActualProbability();
 		}
 		return new LogProb(sum);
-	}
-	
-	private class XiInput {
-		HMMState i;
-		HMMState j;
-		int t;
-		List<List<String>> words;
-		List<List<TargetEvent>> events;
 	}
 
 	
@@ -1058,6 +1356,7 @@ public class HiddenMarkovModel {
 		totalUniqueWords = uniqueWordSet.size();
 		
 		this.smoothAllEmissions(totalUniqueWords, totalWordsFound);
+		this.trainEmissionLambdas(testingDocs);
 		
 		if (printTiming) updateTimer.stopAndPrintFuncTiming("Baum-Welch update");
 		
@@ -1080,6 +1379,28 @@ public class HiddenMarkovModel {
 	
 	private void smoothTransitions() {
 		for (HMMState s : states) s.smoothTransitions();
+	}
+	
+	private void trainEmissionLambdas(List<HMMTrainingDocument> testingDocs) {
+		Map<HMMState, List<String>> emittedStrings = new HashMap<HMMState, List<String>>();
+		
+		for (HMMTrainingDocument doc : testingDocs) {
+			List<String> flattened = Utility.flatten(doc.text);
+			
+			HMMState.Extraction result = start.getOptimalSequence(Utility.flatten(doc.text));
+			List<HMMState> path = result.path;
+			
+			for (int i=0; i<flattened.size(); i++) {
+				HMMState s = path.get(i);
+				String   w = flattened.get(i);
+				
+				emittedStrings.putIfAbsent(s, new ArrayList<String>());
+				
+				emittedStrings.get(s).add(w);
+			}
+		}
+		
+		for (HMMState h : emittedStrings.keySet()) h.updateLambdas(emittedStrings.get(h));
 	}
 
 	private void replaceConnection(HMMState head, boolean addSelfCycles, StateType[] typesThatTailConnectsTo) {
@@ -1143,7 +1464,10 @@ public class HiddenMarkovModel {
 		}
 	}
 	
-	public void addHead(HMMState s) {
+	public void addHead(StateType t) {
+		HMMState s = new HMMState(t, getHierarchyParent(null, t));
+		stateHeadContexts.put(s, s.hierarchyNode);
+		
 		Set<HMMState> visited = new HashSet<HMMState>();
 		
 		Stack<HMMState> next = new Stack<HMMState>();
@@ -1189,10 +1513,10 @@ public class HiddenMarkovModel {
 	public static HiddenMarkovModel generateBasicModel() {
 		HiddenMarkovModel out = new HiddenMarkovModel();
 		
-		out.addHead(new HMMState(StateType.PREFIX));
-		out.addHead(new HMMState(StateType.SUFFIX));
-		out.addHead(new HMMState(StateType.BACKGROUND));
-		out.addHead(new HMMState(StateType.TARGET));
+		out.addHead(StateType.PREFIX);
+		out.addHead(StateType.SUFFIX);
+		out.addHead(StateType.BACKGROUND);
+		out.addHead(StateType.TARGET);
 
 		out.replaceAllConnections();
 		
@@ -1214,7 +1538,8 @@ public class HiddenMarkovModel {
 	}
 	
 	public Set<String> extract(List<String> doc, boolean extractSingle) {
-		List<HMMState> path = start.getOptimalSequence(doc);
+		HMMState.Extraction result = start.getOptimalSequence(doc);
+		List<HMMState> path = result.path;
 		
 		Set<String> allCapturedTokens = new HashSet<String>();
 		
