@@ -360,13 +360,33 @@ class HMMState {
 	
 	public class ProbabilityTable {
 		private List<Map<HMMState, LogProb>> table;
+		private List<LogProb> sums;
 		
 		public ProbabilityTable(List<Map<HMMState, LogProb>> t) {
 			table = t;
+			sums = new ArrayList<LogProb>();
+			
+			for (int i=0; i<table.size(); i++) {
+				Map<HMMState, LogProb> col = table.get(i);
+				
+				LogProb max = new LogProb(0.0);
+				for (LogProb p : col.values())  if (p.getValue() > max.getValue()) max = p;
+				
+				double sum = 0.0;
+				for (LogProb p : col.values()) sum += p.sub(max).getActualProbability();
+				
+				LogProb lpSum = new LogProb(sum).add(max);
+				
+				sums.add(lpSum);
+			}
 		}
 		
 		public LogProb find(HMMState trg, int t) {
 			return HMMState.findTargetProbabilityOrSumIfTargetNull(table.get(t), trg);
+		}
+		
+		public LogProb sum(int t) {
+			return sums.get(t);
 		}
 	}
 	
@@ -499,13 +519,15 @@ class HMMState {
 		for (LogProb l : col.values()) {
 			if (l.getValue() > max.getValue()) max = l;
 		}
-		
+		/*
 		for (LogProb l : col.values()) {
 			double prob = l.sub(max).getActualProbability();
 			
 			sum += prob;
 		}
 		LogProb factor = new LogProb(sum).add(max); 
+		*/
+		LogProb factor = max;
 		
 		//hacky fix for underflow
 		if (Double.isInfinite(factor.getValue())) {
@@ -1190,9 +1212,9 @@ public class HiddenMarkovModel {
 	}
 	
 	private class XiTable {
-		private Map<StatePair, Map<Integer, LogProb>> table;
+		private Map<Integer, Map<StatePair, LogProb>> table;
 		
-		public XiTable(Map<StatePair, Map<Integer, LogProb>> t) {
+		public XiTable(Map<Integer, Map<StatePair, LogProb>> t) {
 			table = t;
 			
 		}
@@ -1201,9 +1223,9 @@ public class HiddenMarkovModel {
 			StatePair p = new StatePair(i, j);
 			
 			//implicitly storing 0s to make debugging easier
-			if (table.get(p) == null || table.get(p).get(t) == null) return new LogProb(0);
+			if (table.get(t) == null || table.get(t).get(p) == null) return new LogProb(0);
 			
-			return table.get(p).get(t);
+			return table.get(t).get(p);
 		}
 	}
 	
@@ -1212,28 +1234,43 @@ public class HiddenMarkovModel {
 							   HMMState.ProbabilityTable forwards, HMMState.ProbabilityTable backwards, double totalUniqueWords) {
 		
 
-		Map<StatePair, Map<Integer, LogProb>> results = new HashMap<StatePair, Map<Integer, LogProb>>();
+		Map<Integer, Map<StatePair, LogProb>> results = new HashMap<Integer, Map<StatePair, LogProb>>();
 		
 		
 		
-		
-		for (HMMState i : states) {
-			for (HMMState j : states) {
-				StatePair pair = new StatePair(i, j);
-				for (int t=0; t < words.size(); t++) {
 
-					String wordAtJ = words.get(t);
+		for (int t=0; t < words.size() - 1; t++) {
+			LogProb max = new LogProb(-1);
+			
+			for (HMMState i : states) {
+				for (HMMState j : states) {
+					StatePair pair = new StatePair(i, j);
+	
+					String wordAtJ = words.get(t+1);
 					
 					LogProb numerator = forwards.find(i,  t);
 					numerator = numerator.add(backwards.find(j, t+1));
 					numerator = numerator.add(i.getProbabilityTo(j)).add(j.getEmissionProbability(wordAtJ, totalUniqueWords));
 					
-					if (numerator.getActualProbability() == 0.0) continue;
+					if (Double.isInfinite(numerator.getValue())) continue;
 					
-					results.putIfAbsent(pair, new HashMap<Integer, LogProb>());
-					results.get(pair).put(t, numerator);
+					results.putIfAbsent(t, new HashMap<StatePair, LogProb>());
+					results.get(t).put(pair, numerator);
+					
+					if (numerator.getValue() > max.getValue()) max = numerator;
 				}
 			}
+			
+			double sum = 0.0;
+			for (LogProb prob : results.get(t).values()) {
+				sum += prob.sub(max).getActualProbability();
+			}
+			LogProb lpSum = new LogProb(sum).add(max);
+			
+			for (StatePair pair : results.get(t).keySet()) {
+				results.get(t).put(pair, results.get(t).get(pair).sub(lpSum));
+			}
+			
 		}
 		
 		
@@ -1286,18 +1323,22 @@ public class HiddenMarkovModel {
 		}
 	}
 	
-	private LogProb gamma(HMMState i, int t, LogProb den, List<List<String>> words, 
+	private LogProb gamma(HMMState i, int t, List<List<String>> words, 
 						  HMMState.ProbabilityTable forwards, HMMState.ProbabilityTable backwards, XiTable xiTable) {
 		//return getForwardsProbabilityPartial(i, t, words, events).add(getBackwardsProbabilityPartial(i, t, words, events));
-		double sum = 0.0;
+		/*double sum = 0.0;
 		for (HMMState s : i.getTransitions().keySet()) {
-			sum += xiTable.find(i, s, t).getActualProbability();
+			//sum += xiTable.find(i, s, t).getActualProbability();
+			
 			/*if (Double.isNaN(sum)) {
 				throw new IllegalStateException("NaN gamma");
 			}*/
 			//sum += xi(i, s, t, den, words, events, forwards, backwards).getActualProbability();
-		} 
-		return new LogProb(sum);
+		/*} 
+		return new LogProb(sum);*/
+		LogProb actualDen = forwards.sum(t).add(backwards.sum(t));
+		
+		return forwards.find(i, t).add(backwards.find(i, t)).sub(actualDen);
 	}
 
 	protected List<HMMState> getHeadListForType(StateType t) {
@@ -1444,7 +1485,7 @@ public class HiddenMarkovModel {
 					Map<String, Double> iWordProbs = emissionProbNumerator.get(i);
 					if (!iWordProbs.containsKey(str)) iWordProbs.put(str, 0.0);
 					
-					iWordProbs.put(str, gamma(i, idx, new LogProb(1.0), doc, forwardsTable, backwardsTable, xiTable).getActualProbability()
+					iWordProbs.put(str, gamma(i, idx, doc, forwardsTable, backwardsTable, xiTable).getActualProbability()
 									    + iWordProbs.get(str));
 					
 					idx++;
@@ -1457,7 +1498,7 @@ public class HiddenMarkovModel {
 			for (HMMState i : states) {
 				for (int t=1; t < totalSize; t++) {
 					gammaTimer.start();
-					commonDenominator += gamma(i, t, new LogProb(1.0), doc, forwardsTable, backwardsTable, xiTable).getActualProbability();
+					commonDenominator += gamma(i, t, doc, forwardsTable, backwardsTable, xiTable).getActualProbability();
 					gammaTimer.pause();
 				}
 			}
@@ -1514,11 +1555,12 @@ public class HiddenMarkovModel {
 		//return this.test(trainingDocs);
 	}
 	
-	public void baumWelchOptimize(int numSteps, List<HMMTrainingDocument> trainingDocs, List<HMMTrainingDocument> testingDocs, boolean clear, boolean printTiming) {
+	public void baumWelchOptimize(int numSteps, List<HMMTrainingDocument> trainingDocs, List<HMMTrainingDocument> testingDocs,
+								  boolean clear, boolean printTiming, Function<HiddenMarkovModel, Double> scorer) {
 		if (clear) normalizeProbabilities(trainingDocs);
 		
 		Timer t = new Timer();
-		double prevScore = test(testingDocs);
+		double prevScore = scorer.apply(this);
 		
 		for (int i=0; i < numSteps; i++) {
 			if (printTiming) System.out.println("Beginning training step");
@@ -1528,7 +1570,7 @@ public class HiddenMarkovModel {
 			smoothTransitions();
 			normalizeTransitions();
 			
-			double postScore = test(testingDocs);
+			double postScore = scorer.apply(this);
 			
 			//do_stuff()?
 			if (printTiming) {

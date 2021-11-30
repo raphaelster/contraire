@@ -228,43 +228,48 @@ public class Train {
 		Map<ResultField, Double> prevScores = new HashMap<ResultField, Double>();
 		Map<ResultField, Double> postScores = new HashMap<ResultField, Double>();
 		
-		HiddenMarkovModel profileHMM = HiddenMarkovModel.generateBasicModel();
-
-		{
-			List<HMMTrainingDocument> profileTraining = HMMTrainingDocument.makeFromCorpusForField(convertedCorpus, allKeyFiles, ResultField.ACQUIRED, tokenizeSingle);
-
-			profileHMM.baumWelchOptimize(100, profileTraining, profileTraining, true, true);
-		}
+		boolean first = true;
+		
 		
 		for (ResultField f : ResultField.values()) {
 			List<HMMTrainingDocument> allHMMTrainingFiles = HMMTrainingDocument.makeFromCorpusForField(convertedCorpus, allKeyFiles, f, tokenizeSingle);
 
 			
 			int size = allHMMTrainingFiles.size();
-			int halfSize = size/2;
+			int partSize = 3*size/4;
 
 			HiddenMarkovModel basic = HiddenMarkovModel.generateBasicModel();
-			List<HMMTrainingDocument> train = allHMMTrainingFiles.subList(0, halfSize);
-			List<HMMTrainingDocument> test = allHMMTrainingFiles.subList(halfSize, size);
-			
+			List<HMMTrainingDocument> train = allHMMTrainingFiles.subList(0, partSize);
+			List<HMMTrainingDocument> test = allHMMTrainingFiles.subList(partSize, size);
+
 			List<List<List<ConvertedWord>>> test2 = new ArrayList<List<List<ConvertedWord>>>();
 			for (HMMTrainingDocument d : test) {
 				test2.add(d.text);
 			}
 
 			Function<HiddenMarkovModel, Double> scorer = (model) -> {
-				return scoreAll(model, test2, allKeyFiles.subList(halfSize, size), f, false);
+				return scoreAll(model, test2, allKeyFiles.subList(partSize, size), f, false);
 			};
+
+			if (first) {
+
+				HiddenMarkovModel profileHMM = HiddenMarkovModel.generateBasicModel();
+
+				profileHMM.baumWelchOptimize(100, train, test, true, true, scorer);
+				
+				scoreAll(profileHMM, test2, allKeyFiles.subList(partSize, size), f, true);
+				first = false;
+			}
 			
 			boolean verbose = true;
 			
 			//if (!tried && f == ResultField.ACQUIRED) {
 				//basic.extract(Utility.flatten(test.get(0).text), ExtractedResult.fieldIsSingular(f));
-			double prev = scoreAll(basic, test2, allKeyFiles.subList(halfSize, size), f, verbose);
+			double prev = scoreAll(basic, test2, allKeyFiles.subList(partSize, size), f, verbose);
 			
 			HiddenMarkovModel best = HiddenMarkovModelGenerator.evolveOptimal(train, test, scorer);
 			//basic.baumWelchOptimize(10, train, test, true, false);
-			double post  = scoreAll(basic, test2, allKeyFiles.subList(halfSize, size), f, verbose);
+			double post  = scoreAll(basic, test2, allKeyFiles.subList(partSize, size), f, verbose);
 			
 			prevScores.put(f, prev);
 			postScores.put(f, post);

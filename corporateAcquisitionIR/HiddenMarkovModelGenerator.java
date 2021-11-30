@@ -104,7 +104,7 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 			
 			model = HiddenMarkovModel.generateBasicModel();
 			for (Mutator m : mutations) model = m.apply(model);
-			model.baumWelchOptimize(optSteps, trainData, testData, true, false);
+			model.baumWelchOptimize(optSteps, trainData, testData, true, false, evaluator);
 			score = evaluator.apply(model);
 		}
 		
