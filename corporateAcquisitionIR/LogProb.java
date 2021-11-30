@@ -1,5 +1,7 @@
 package corporateAcquisitionIR;
 
+import java.util.Collection;
+
 public class LogProb {
 	double value;
 	
@@ -25,6 +27,17 @@ public class LogProb {
 		return out;
 	}
 
+	public static LogProb safeSum(Collection<LogProb> list) {
+		LogProb max = new LogProb(0.0);
+		
+		for (LogProb l : list) if (l.getValue() > max.getValue()) max = l;
+		
+		double sum = 0.0;
+		for (LogProb l : list) sum += l.sub(max).getActualProbability();
+		
+		return new LogProb(sum).add(max);
+	}
+	
 	public LogProb sub(LogProb other) {
 		LogProb out = new LogProb(1.0);
 		out.value += this.value;

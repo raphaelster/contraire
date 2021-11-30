@@ -1212,20 +1212,22 @@ public class HiddenMarkovModel {
 	}
 	
 	private class XiTable {
-		private Map<Integer, Map<StatePair, LogProb>> table;
+		//private Map<Integer, Map<StatePair, LogProb>> table;
+		private Map<StatePair, LogProb> summedTable;
 		
-		public XiTable(Map<Integer, Map<StatePair, LogProb>> t) {
-			table = t;
+		public XiTable(Map<StatePair, LogProb> t) {
+			summedTable = t;
 			
 		}
 		
-		LogProb find(HMMState i, HMMState j, int t) {
+		LogProb find(HMMState i, HMMState j) {
 			StatePair p = new StatePair(i, j);
 			
 			//implicitly storing 0s to make debugging easier
-			if (table.get(t) == null || table.get(t).get(p) == null) return new LogProb(0);
+			//if (table.get(t) == null || table.get(t).get(p) == null) return new LogProb(0);
+			if (summedTable.get(p) == null) return new LogProb(0);
 			
-			return table.get(t).get(p);
+			return summedTable.get(p);
 		}
 	}
 	
@@ -1234,12 +1236,18 @@ public class HiddenMarkovModel {
 							   HMMState.ProbabilityTable forwards, HMMState.ProbabilityTable backwards, double totalUniqueWords) {
 		
 
-		Map<Integer, Map<StatePair, LogProb>> results = new HashMap<Integer, Map<StatePair, LogProb>>();
-		
+		//Map<Integer, Map<StatePair, LogProb>> results = new HashMap<Integer, Map<StatePair, LogProb>>();
+		Map<StatePair, Double> storedSums = new HashMap<StatePair, Double>();
+		LogProb currentSavedBest = new LogProb(0.0);
+		LogProb lastSavedBest = new LogProb(0.0);
+		Map<StatePair, LogProb> currentResults = new HashMap<StatePair, LogProb>();
 		
 		
 
 		for (int t=0; t < words.size() - 1; t++) {
+			lastSavedBest = currentSavedBest;
+			currentSavedBest = new LogProb(0.0);
+			
 			LogProb max = new LogProb(-1);
 			
 			for (HMMState i : states) {
@@ -1254,28 +1262,38 @@ public class HiddenMarkovModel {
 					
 					if (Double.isInfinite(numerator.getValue())) continue;
 					
-					results.putIfAbsent(t, new HashMap<StatePair, LogProb>());
-					results.get(t).put(pair, numerator);
+					currentResults.put(pair, numerator);
 					
 					if (numerator.getValue() > max.getValue()) max = numerator;
 				}
 			}
 			
-			double sum = 0.0;
-			for (LogProb prob : results.get(t).values()) {
-				sum += prob.sub(max).getActualProbability();
-			}
-			LogProb lpSum = new LogProb(sum).add(max);
 			
-			for (StatePair pair : results.get(t).keySet()) {
-				results.get(t).put(pair, results.get(t).get(pair).sub(lpSum));
+			LogProb normalizeDenominator = LogProb.safeSum(currentResults.values());
+			
+			for (StatePair pair : currentResults.keySet()) {
+				LogProb p = currentResults.get(pair).sub(normalizeDenominator);
+				if (p.getValue() > currentSavedBest.getValue()) currentSavedBest = p;
+				currentResults.put(pair, p);
+			}
+			
+			//add to sums
+			for (StatePair p : currentResults.keySet()) {
+				storedSums.putIfAbsent(p, 0.0);
+				
+				double value = currentResults.get(p).sub(currentSavedBest).getActualProbability()
+							   + storedSums.get(p) * Math.pow(2, lastSavedBest.getValue() - currentSavedBest.getValue());
+				storedSums.put(p, value);
 			}
 			
 		}
 		
+		Map<StatePair, LogProb> finalSums = new HashMap<StatePair, LogProb>();
+		
+		for (StatePair p : storedSums.keySet()) finalSums.put(p, new LogProb(storedSums.get(p)).add(currentSavedBest));
 		
 		
-		return new XiTable(results);
+		return new XiTable(finalSums);
 	}
 	
 	private class StatePair {
@@ -1395,12 +1413,22 @@ public class HiddenMarkovModel {
 		return out;
 	}
 	
+	
 	private void baumWelchStep(List<HMMTrainingDocument> trainingDocs, List<HMMTrainingDocument> testingDocs, boolean printTiming) {
 		normalizeTransitions();
 		
 		Map<StatePair, Double> transitionProbNumerator = new HashMap<StatePair, Double>();
 		Map<HMMState, Map<String, Double>> emissionProbNumerator = new HashMap<HMMState, Map<String, Double>>();
 
+		Map<StatePair, LogProb> xiSumOverT = new HashMap<StatePair, LogProb>();
+		Map<HMMState, LogProb> gammaSumOverT = new HashMap<HMMState, LogProb>();
+		Map<StateWord, LogProb> gammaDotObservationVector = new HashMap<StateWord, LogProb>();
+		
+		//so, for emission probabilities:
+		//  for each state i:
+		//   num = sum gamma_i(t) * occurence vector
+		//  
+		
 		double commonDenominator = 0.0001;
 		
 
