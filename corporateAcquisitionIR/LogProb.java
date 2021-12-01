@@ -1,8 +1,16 @@
 package corporateAcquisitionIR;
 
+import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 
-public class LogProb {
+public class LogProb implements Serializable {
+	
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = -3036461688922925830L;
 	double value;
 	
 	public LogProb(double normalProb) {
@@ -32,10 +40,40 @@ public class LogProb {
 		
 		for (LogProb l : list) if (l.getValue() > max.getValue()) max = l;
 		
+		if (Double.isInfinite(max.getValue())) return new LogProb(0);
+		
 		double sum = 0.0;
 		for (LogProb l : list) sum += l.sub(max).getActualProbability();
 		
 		return new LogProb(sum).add(max);
+	}
+	
+	public static LogProb safeSum(LogProb a, LogProb b) {
+		LogProb max = a;
+		
+		if (b.getValue() > a.getValue()) max = b;
+		
+		if (Double.isInfinite(max.getValue())) return new LogProb(0);
+		
+		double sum = a.sub(max).getActualProbability() + b.sub(max).getActualProbability();
+		
+		
+		return new LogProb(sum).add(max);
+	}
+
+	public static List<LogProb> additiveSmoothing(List<LogProb> in, LogProb smooth) {
+		LogProb smoothTotalFactor = new LogProb(in.size());
+		
+		List<LogProb> out = new ArrayList<LogProb>();
+		
+		LogProb total = LogProb.safeSum(in);
+		
+		for (LogProb p : in) {
+			out.add(p.add(smooth).sub(total).sub(smoothTotalFactor));
+		}
+		
+		return out;
+		
 	}
 	
 	public LogProb sub(LogProb other) {

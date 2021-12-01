@@ -20,6 +20,8 @@ import edu.stanford.nlp.ling.HasWord;
 import edu.stanford.nlp.ling.TaggedWord;
 import edu.stanford.nlp.parser.nndep.DependencyParser;
 import edu.stanford.nlp.tagger.maxent.MaxentTagger;
+import edu.stanford.nlp.trees.GrammaticalRelation;
+import edu.stanford.nlp.trees.GrammaticalStructure;
 
 
 public class Train {
@@ -39,6 +41,11 @@ public class Train {
 			out.add(tagger.tagSentence(sentence));
 		}
 		
+		return out;
+	}
+	public static List<GrammaticalStructure> parseAugment(List<List<TaggedWord>> tagged, DependencyParser parser) {
+		List<GrammaticalStructure> out = new ArrayList<GrammaticalStructure>();
+		for (List<TaggedWord> sentence : tagged) out.add(parser.predict(sentence));
 		return out;
 	}
 	
@@ -124,9 +131,11 @@ public class Train {
 		List<List<String>> trainFilepathList;
 		MaxentTagger tagger = new MaxentTagger("lib/tagger/english-left3words-distsim.tagger");
 		AbstractSequenceClassifier<CoreLabel> classifier;
+		DependencyParser parser;
 		
 		try {
 			classifier = CRFClassifier.getClassifier("lib/classifier/english.muc.7class.distsim.crf.ser.gz");
+			parser = DependencyParser.loadFromModelFile("edu/stanford/nlp/models/parser/nndep/english_UD.gz"); 
 			
 		} catch (Exception e) {
 			System.out.println("Failed to load NER classifier:\n"+e.getMessage());
@@ -179,8 +188,9 @@ public class Train {
 			
 			List<List<TaggedWord>> tagged = tagAugment(hwList, tagger);
 			List<List<CoreLabel>> ner = nerAugment(tagged, classifier);
+			List<GrammaticalStructure> parsed = parseAugment(tagged, parser);
 			
-			return ConvertedWord.convertParsedFile(ner);
+			return ConvertedWord.convertParsedFile(ner, parsed);
 		};
 		
 		Function<String, List<String>> tokenizeSingle = (s) -> {
@@ -254,8 +264,9 @@ public class Train {
 			if (first) {
 
 				HiddenMarkovModel profileHMM = HiddenMarkovModel.generateBasicModel();
+				profileHMM = HiddenMarkovModel.fromFile("./ACQBUS.ser");
 
-				profileHMM.baumWelchOptimize(100, train, test, true, true, scorer);
+				profileHMM.baumWelchOptimize(10, train, test, true, true, scorer);
 				
 				scoreAll(profileHMM, test2, allKeyFiles.subList(partSize, size), f, true);
 				first = false;
@@ -267,7 +278,7 @@ public class Train {
 				//basic.extract(Utility.flatten(test.get(0).text), ExtractedResult.fieldIsSingular(f));
 			double prev = scoreAll(basic, test2, allKeyFiles.subList(partSize, size), f, verbose);
 			
-			HiddenMarkovModel best = HiddenMarkovModelGenerator.evolveOptimal(train, test, scorer);
+			HiddenMarkovModel best = HiddenMarkovModelGenerator.evolveOptimal(train, test, scorer, f);
 			//basic.baumWelchOptimize(10, train, test, true, false);
 			double post  = scoreAll(basic, test2, allKeyFiles.subList(partSize, size), f, verbose);
 			
@@ -275,6 +286,7 @@ public class Train {
 			postScores.put(f, post);
 				//basic.extract(Utility.flatten(test.get(0).text), ExtractedResult.fieldIsSingular(f));
 			//}
+			
 		}
 		
 		System.out.println("Final scores:\n");

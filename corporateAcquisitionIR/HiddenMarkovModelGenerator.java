@@ -1,5 +1,7 @@
 package corporateAcquisitionIR;
 
+import java.io.FileOutputStream;
+import java.io.ObjectOutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -25,7 +27,7 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 	
 
 	public static HiddenMarkovModel evolveOptimal(List<HMMTrainingDocument> trainData, List<HMMTrainingDocument> testData,
-												  Function<HiddenMarkovModel, Double> evaluator) {
+												  Function<HiddenMarkovModel, Double> evaluator, ResultField f) {
 		final int TOTAL_STEPS = 10;
 		final int MAX_NUM_CANDIDATES = 4;
 		
@@ -55,13 +57,21 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 		out.add(initialCandidate);
 		
 		List<Candidate> keptCandidates = new ArrayList<Candidate>();
+
 		
 		for (int i=0; i<TOTAL_STEPS; i++) {
+			
 			List<Candidate> toMutate = new ArrayList<Candidate>();
 			
 			toMutate.addAll(out);
 			keptCandidates.addAll(out);
 			out.clear();
+			
+
+			for (Candidate c : keptCandidates) {
+				c.save(f+"/"+c.score);
+			}
+			keptCandidates.clear();
 			
 			for (Candidate parent : toMutate) {
 				List<List<Mutator>> mutations = parent.mutate();
@@ -83,10 +93,13 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 			for (int k=0; k<MAX_NUM_CANDIDATES; k++) goodCandidates.add(out.get(k));
 			out = goodCandidates;
 			keptCandidates.add(out.get(0));
+			
+			System.out.println("Finished generation "+i+"/"+TOTAL_STEPS);
 		}
 		
 		Collections.sort(keptCandidates, candidateComparator);
 		
+		keptCandidates.get(0).save(f+"_FINAL");
 		return keptCandidates.get(0).model;
 	}
 	
@@ -152,6 +165,32 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 		
 		public String toString() {
 			return score + " " + model;
+		}
+		
+		private void save(String nameExcludingUniquePostfix, int tries) {
+			final int MAX_TRIES = 4;
+			
+			try {
+				String subFilename = nameExcludingUniquePostfix+"_"+System.nanoTime();
+				subFilename.replaceAll("\\.", "-");
+				ObjectOutputStream objOut = new ObjectOutputStream(new FileOutputStream("./models/"+subFilename+".ser"));
+				
+				objOut.writeObject(model);
+				
+				objOut.close();
+			}
+			catch (Exception e) {
+				System.out.println("Failed to save HMM:\n"+e.getMessage());
+				if (tries < MAX_TRIES) {
+					System.out.println("Trying again:");
+					save(nameExcludingUniquePostfix, tries + 1);
+				}
+			}
+		}
+		
+		public void save(String nameExcludingUniquePostfix) {
+			save(nameExcludingUniquePostfix, 0);
+			
 		}
 	}
 }

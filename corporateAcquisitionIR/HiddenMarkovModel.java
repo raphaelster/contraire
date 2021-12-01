@@ -1,4 +1,8 @@
 package corporateAcquisitionIR;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.ObjectInputStream;
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -26,7 +30,11 @@ enum TargetEvent {
 	NO_EVENT
 }
 
-class StateHierarchy {
+class StateHierarchy implements Serializable {
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = -7106329120634801425L;
 	public StateHierarchy parent;
 	public Set<StateHierarchy> children;
 	public HMMState value;
@@ -183,6 +191,7 @@ class StateHierarchy {
 		this.probabilityIsUniform = b;
 	}
 	
+	//this is the StateHierarchy one
 	private List<Double> getEmissionVector(String word, double totalUniqueWords) {
 		if (memoizedEmissions.containsKey(word)) return memoizedEmissions.get(word);
 		
@@ -232,7 +241,11 @@ class StateHierarchy {
 }
 
 
-class HMMState {
+class HMMState implements Serializable {
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = -8912780681979259866L;
 	static final boolean IGNORE_CASE = false;
 	static final boolean IGNORE_HIERARCHY = true;
 	private static int maxID = 0;
@@ -367,15 +380,7 @@ class HMMState {
 			sums = new ArrayList<LogProb>();
 			
 			for (int i=0; i<table.size(); i++) {
-				Map<HMMState, LogProb> col = table.get(i);
-				
-				LogProb max = new LogProb(0.0);
-				for (LogProb p : col.values())  if (p.getValue() > max.getValue()) max = p;
-				
-				double sum = 0.0;
-				for (LogProb p : col.values()) sum += p.sub(max).getActualProbability();
-				
-				LogProb lpSum = new LogProb(sum).add(max);
+				LogProb lpSum = LogProb.safeSum(table.get(i).values());
 				
 				sums.add(lpSum);
 			}
@@ -391,18 +396,32 @@ class HMMState {
 	}
 	
 	void smoothTransitions() {
-		/*double addVal = Math.pow(10, -50);
+		LogProb addVal = LogProb.makeFromExponent(-200);
 		double v = transitions.size();
 		
+		for (HMMState s : transitions.keySet()) {
+			if (Double.isNaN(transitions.get(s).getValue())) {
+				transitions.put(s, new LogProb(0));
+			}
+		}
 		
-		double totalProb = 0.0;
-		for (LogProb p : transitions.values()) totalProb += p.getActualProbability();
+		LogProb bestProb = new LogProb(0);
+		for (LogProb p : transitions.values()) {
+			if (p.getValue() > bestProb.getValue()) bestProb = p;	
+		}
+		
+		LogProb totalProb = LogProb.safeSum(transitions.values());
+		
+		if (Double.isInfinite(bestProb.getValue())) {
+			for (HMMState s : transitions.keySet()) transitions.put(s, new LogProb(1.0 / transitions.size()));
+		}
 			
 		for (HMMState s : transitions.keySet()) {
-			double prob = transitions.get(s).getActualProbability() + addVal;
-			prob /= totalProb + addVal*v;
-			transitions.put(s, new LogProb(prob));
-		}*/
+			LogProb finalProb = LogProb.safeSum(transitions.get(s), addVal);
+			finalProb.sub(LogProb.safeSum(totalProb, addVal.add(new LogProb(v))));
+			//prob /= totalProb + addVal*v;
+			transitions.put(s, finalProb);
+		}
 	}
 	
 	void smoothEmissions(double totalUniqueWords, double totalWords) {
@@ -412,11 +431,16 @@ class HMMState {
 
 		double MIN_EMISSION_VAL = -20000;
 		
+		totalUniqueWords++;	//+1 for all unknown words
+		
+		double addKVal = 1.0 / totalUniqueWords / 2.0 / 500000.0;
+		
 		Set<String> keysToRemove = new HashSet<String>();
 
 		for (String s : emissions.keySet()) {
 			if (emissions.get(s).getValue() < MIN_EMISSION_VAL || Double.isNaN(emissions.get(s).getValue())) {
-				emissions.put(s, LogProb.makeFromExponent(MIN_EMISSION_VAL));
+				//emissions.put(s, LogProb.makeFromExponent(MIN_EMISSION_VAL));
+				keysToRemove.add(s);
 			}
 		}
 		
@@ -428,12 +452,19 @@ class HMMState {
 			return;
 		}
 		
+		LogProb emissionsSum = LogProb.safeSum(emissions.values());
+		for (String s : emissions.keySet()) {
+			LogProb prob = LogProb.safeSum(emissions.get(s), new LogProb(addKVal))
+					.sub(LogProb.safeSum(emissionsSum, new LogProb(addKVal * totalUniqueWords)));
+			emissions.put(s,  emissions.get(s).sub(emissionsSum));
+		}
+		
 		//double totalProbability = 0.0;
 		//double minProbability = Double.NEGATIVE_INFINITY;
 		//double emissionSum = 0.0;
 		//for (LogProb p : emissions.values()) emissionSum += p.getActualProbability();
 		
-		defaultEmissionProbability = LogProb.makeFromExponent(MIN_EMISSION_VAL);
+		defaultEmissionProbability = new LogProb(addKVal);
 		
 		
 	}
@@ -654,7 +685,9 @@ class HMMState {
 		
 		
 		Map<HMMState, LogProb> startNode = new HashMap<HMMState, LogProb>();
-		for (HMMState s : allStates) startNode.put(s, new LogProb(1.0));
+		for (HMMState s : allStates) {
+			if (s.getType() != StateType.TARGET) startNode.put(s, new LogProb(1.0));
+		}
 		sparseMap.add(startNode);
 
 		if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(startNode);
@@ -697,7 +730,7 @@ class HMMState {
 				}
 
 				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent, true, totalUniqueWords);
- 
+  
 				if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(nextMap);
 
 				for (LogProb p  : nextMap.values()) if (Double.isNaN(p.getActualProbability())) {
@@ -897,8 +930,10 @@ class HMMState {
 		transitions.clear();
 	}
 	
+	/*
 	public void normalizeProbabilities() {
 		normalizeTransitions();
+		
 		
 		double sum = 0.0;
 		for (LogProb p : emissions.values()) sum += p.getActualProbability();
@@ -906,13 +941,13 @@ class HMMState {
 			double newProb = emissions.get(s).getActualProbability() / sum;
 			emissions.put(s, new LogProb(newProb));
 		}
-	}
+	}*/
 	
 	public void normalizeTransitions() {
-		double sum = 0.0;
-		for (LogProb p : transitions.values()) sum += p.getActualProbability();
+		LogProb sum = LogProb.safeSum(transitions.values());
+		
 		for (HMMState s : transitions.keySet()) {
-			LogProb newProb = transitions.get(s).sub(new LogProb(sum));
+			LogProb newProb = transitions.get(s).sub(sum);
 			transitions.put(s, newProb);
 		}
 		
@@ -957,7 +992,12 @@ class HMMState {
 
 
 
-public class HiddenMarkovModel {
+public class HiddenMarkovModel  implements Serializable  {
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = -5234309004000188518L;
+
 	private HashSet<HMMState> states;
 	
 	private HMMState start;
@@ -974,7 +1014,7 @@ public class HiddenMarkovModel {
 	private Map<HMMState, StateHierarchy> stateHeadContexts;
 	
 	public static final String PHI_TOKEN = ".~!phi!~.";
-	public static final boolean RENORMALIZE = true;
+	public static final boolean RENORMALIZE = false;
 
 	private void initHierarchy() {
 
@@ -1237,7 +1277,7 @@ public class HiddenMarkovModel {
 		
 
 		//Map<Integer, Map<StatePair, LogProb>> results = new HashMap<Integer, Map<StatePair, LogProb>>();
-		Map<StatePair, Double> storedSums = new HashMap<StatePair, Double>();
+		Map<StatePair, List<LogProb>> storedSums = new HashMap<StatePair, List<LogProb>>();
 		LogProb currentSavedBest = new LogProb(0.0);
 		LogProb lastSavedBest = new LogProb(0.0);
 		Map<StatePair, LogProb> currentResults = new HashMap<StatePair, LogProb>();
@@ -1248,10 +1288,10 @@ public class HiddenMarkovModel {
 			lastSavedBest = currentSavedBest;
 			currentSavedBest = new LogProb(0.0);
 			
-			LogProb max = new LogProb(-1);
+			LogProb max = new LogProb(0.0);
 			
 			for (HMMState i : states) {
-				for (HMMState j : states) {
+				for (HMMState j : i.getTransitions().keySet()) {
 					StatePair pair = new StatePair(i, j);
 	
 					String wordAtJ = words.get(t+1);
@@ -1279,18 +1319,21 @@ public class HiddenMarkovModel {
 			
 			//add to sums
 			for (StatePair p : currentResults.keySet()) {
-				storedSums.putIfAbsent(p, 0.0);
+				storedSums.putIfAbsent(p, new ArrayList<LogProb>());
+				storedSums.get(p).add(currentResults.get(p));
 				
-				double value = currentResults.get(p).sub(currentSavedBest).getActualProbability()
+				/*double value = currentResults.get(p).sub(currentSavedBest).getActualProbability()
 							   + storedSums.get(p) * Math.pow(2, lastSavedBest.getValue() - currentSavedBest.getValue());
-				storedSums.put(p, value);
+				storedSums.put(p, value);*/
 			}
 			
+			currentResults.clear();
 		}
 		
 		Map<StatePair, LogProb> finalSums = new HashMap<StatePair, LogProb>();
 		
-		for (StatePair p : storedSums.keySet()) finalSums.put(p, new LogProb(storedSums.get(p)).add(currentSavedBest));
+		for (StatePair p : storedSums.keySet()) finalSums.put(p, LogProb.safeSum(storedSums.get(p)));
+		//for (StatePair p : storedSums.keySet()) finalSums.put(p, new LogProb(storedSums.get(p)).add(currentSavedBest));
 		
 		
 		return new XiTable(finalSums);
@@ -1336,12 +1379,12 @@ public class HiddenMarkovModel {
 			if (o instanceof StateWord == false) return false;
 			
 			StateWord other = (StateWord) o;
-			return start == other.start && end == other.end;
+			return start == other.start && end.equals(other.end);
 			
 		}
 	}
 	
-	private LogProb gamma(HMMState i, int t, List<List<String>> words, 
+	/*private LogProb gamma(HMMState i, int t, List<List<String>> words, 
 						  HMMState.ProbabilityTable forwards, HMMState.ProbabilityTable backwards, XiTable xiTable) {
 		//return getForwardsProbabilityPartial(i, t, words, events).add(getBackwardsProbabilityPartial(i, t, words, events));
 		/*double sum = 0.0;
@@ -1354,11 +1397,23 @@ public class HiddenMarkovModel {
 			//sum += xi(i, s, t, den, words, events, forwards, backwards).getActualProbability();
 		/*} 
 		return new LogProb(sum);*/
-		LogProb actualDen = forwards.sum(t).add(backwards.sum(t));
+		/*LogProb actualDen = forwards.sum(t).add(backwards.sum(t));
 		
 		return forwards.find(i, t).add(backwards.find(i, t)).sub(actualDen);
-	}
+	}*/
 
+	private List<LogProb> gammaVector(HMMState i, int maxT, HMMState.ProbabilityTable forwards, HMMState.ProbabilityTable backwards) {
+		List<LogProb> gammas = new ArrayList<LogProb>();
+		
+		for (int t=0; t<maxT; t++) {
+			LogProb actualDen = forwards.sum(t).add(backwards.sum(t));
+			
+			gammas.add(forwards.find(i, t).add(backwards.find(i, t)).sub(actualDen));
+		}
+		
+		return gammas;
+	}
+	
 	protected List<HMMState> getHeadListForType(StateType t) {
 		switch (t) {
 		case PREFIX:
@@ -1377,7 +1432,7 @@ public class HiddenMarkovModel {
 	
 	private static List<List<TargetEvent>> getTargetEvents(HMMTrainingDocument doc) {
 		
-		List<String> flattened = Utility.flatten(doc.getTextIgnoringOriginal());
+		List<ConvertedWord> flattened = Utility.flatten(doc.text);
 		List<TargetEvent> flatEvents = new ArrayList<TargetEvent>();
 		
 		for (int i=0; i<flattened.size(); i++) flatEvents.add(TargetEvent.NO_EVENT);
@@ -1387,7 +1442,7 @@ public class HiddenMarkovModel {
 				boolean incorrect = i + result.size() >= flattened.size();
 				
 				for (int j=0; j < result.size() && !incorrect; j++) {
-					incorrect = !flattened.get(j+i).equals(result.get(j));
+					incorrect = !flattened.get(j+i).getOriginal().equals(result.get(j));
 				}
 				
 
@@ -1417,21 +1472,15 @@ public class HiddenMarkovModel {
 	private void baumWelchStep(List<HMMTrainingDocument> trainingDocs, List<HMMTrainingDocument> testingDocs, boolean printTiming) {
 		normalizeTransitions();
 		
-		Map<StatePair, Double> transitionProbNumerator = new HashMap<StatePair, Double>();
-		Map<HMMState, Map<String, Double>> emissionProbNumerator = new HashMap<HMMState, Map<String, Double>>();
-
 		Map<StatePair, LogProb> xiSumOverT = new HashMap<StatePair, LogProb>();
 		Map<HMMState, LogProb> gammaSumOverT = new HashMap<HMMState, LogProb>();
-		Map<StateWord, LogProb> gammaDotObservationVector = new HashMap<StateWord, LogProb>();
+		Map<StateWord, LogProb> gammaDotObservationVectorSum = new HashMap<StateWord, LogProb>();
 		
 		//so, for emission probabilities:
 		//  for each state i:
 		//   num = sum gamma_i(t) * occurence vector
 		//  
 		
-		double commonDenominator = 0.0001;
-		
-
 		double totalUniqueWords;
 		double totalWordsFound = 0.0;
 		
@@ -1447,19 +1496,10 @@ public class HiddenMarkovModel {
 		totalUniqueWords = uniqueWordSet.size();
 
 		
-		for (HMMState s : states)  {
-			for (HMMState k : s.getTransitions().keySet()) {
-				transitionProbNumerator.put(new StatePair(s, k), Math.pow(10, -50));
-			}
-		}
 
 		Timer trainTimer = new Timer();
 		Timer parseTimer = new Timer();
-		Timer xiTimer = new Timer();
-		Timer gammaTimer = new Timer();
 		
-		Timer transitionNumTimer = new Timer();
-		Timer emissionNumTimer = new Timer();
 		Timer denTimer = new Timer();
 		
 		Timer tableTimer = new Timer();
@@ -1467,8 +1507,6 @@ public class HiddenMarkovModel {
 		for (HMMTrainingDocument fullDoc : trainingDocs) {
 			List<List<String>> doc = fullDoc.getTextIgnoringOriginal();
 			
-			int totalSize = 0;
-			for (List<String> sentence : doc) totalSize += sentence.size();
 			
 			parseTimer.start();
 			List<String> flattenedDoc = Utility.flatten(doc);
@@ -1487,55 +1525,30 @@ public class HiddenMarkovModel {
 			trainTimer.start();
 			//train
 			for (HMMState i : states) {
-				transitionNumTimer.start();
 				for (HMMState j : i.getTransitions().keySet()) {
+					StatePair p = new StatePair(i, j);
+
+					xiSumOverT.putIfAbsent(p, new LogProb(0.0));
+					xiSumOverT.put(p, LogProb.safeSum(xiSumOverT.get(p), xiTable.find(i, j)));
+				}
 				
-					double aNum = 0.0;
-					for (int t=1; t < totalSize - 1; t++) {
-						xiTimer.start();
-						aNum += xiTable.find(i, j, t).getActualProbability();
-						//aNum += xi(i, j, t, new LogProb(1.0), doc.text, targetEvents, forwardsTable, backwardsTable).getActualProbability();
-						xiTimer.pause();
-					}
+				List<LogProb> gammas = gammaVector(i, flattenedDoc.size(), forwardsTable, backwardsTable);
+				
+				gammaSumOverT.putIfAbsent(i, new LogProb(0.0));
+				gammaSumOverT.put(i, LogProb.safeSum(gammaSumOverT.get(i), LogProb.safeSum(gammas)));
+				
+				for (int k=0; k<gammas.size(); k++) {
+					String word = flattenedDoc.get(k);
+					LogProb gamma = gammas.get(k);
 					
-					StatePair key = new StatePair(i, j);
-					transitionProbNumerator.put(key, aNum + transitionProbNumerator.get(key));
-				}
-				transitionNumTimer.pause();
-
-				emissionNumTimer.start();
-				int idx = 0;
-
-				for (List<String> sentence : doc) for (String str : sentence) {
+					StateWord cur = new StateWord(i, word);
+					gammaDotObservationVectorSum.putIfAbsent(cur, new LogProb(0.0));
 					
-					if (!emissionProbNumerator.containsKey(i)) emissionProbNumerator.put(i,  new HashMap<String, Double>());
-					
-					Map<String, Double> iWordProbs = emissionProbNumerator.get(i);
-					if (!iWordProbs.containsKey(str)) iWordProbs.put(str, 0.0);
-					
-					iWordProbs.put(str, gamma(i, idx, doc, forwardsTable, backwardsTable, xiTable).getActualProbability()
-									    + iWordProbs.get(str));
-					
-					idx++;
-				}
-				emissionNumTimer.pause();
-			}
-			
-			//train denominator
-			denTimer.start();
-			for (HMMState i : states) {
-				for (int t=1; t < totalSize; t++) {
-					gammaTimer.start();
-					commonDenominator += gamma(i, t, doc, forwardsTable, backwardsTable, xiTable).getActualProbability();
-					gammaTimer.pause();
+					LogProb newValue = LogProb.safeSum(gammaDotObservationVectorSum.get(cur), gamma);
+					gammaDotObservationVectorSum.put(cur, newValue);
 				}
 			}
-			denTimer.pause();
 			trainTimer.pause();
-			 
-			if (Double.isNaN(commonDenominator)) {
-				throw new IllegalStateException("NaN commonDenominator");
-			}
 		}
 		
 
@@ -1543,12 +1556,7 @@ public class HiddenMarkovModel {
 			parseTimer.stopAndPrintFuncTiming("Baum-Welch parsing");
 			
 			tableTimer.stopAndPrintFuncTiming("Calculating lookup tables (forwardsProb, backwardsProb, xi)");
-			
-			xiTimer.stopAndPrintFuncTiming("Baum-Welch xi step for num");
-			gammaTimer.stopAndPrintFuncTiming("Baum-Welch gamma step for den");
-			
-			transitionNumTimer.stopAndPrintFuncTiming("BW transition numerator calc");
-			emissionNumTimer.stopAndPrintFuncTiming("BW emission numerator calc");
+		
 			
 			denTimer.stopAndPrintFuncTiming("BW denominator calc");
 			trainTimer.stopAndPrintFuncTiming("Baum-Welch train");
@@ -1557,20 +1565,30 @@ public class HiddenMarkovModel {
 		Timer updateTimer = new Timer();
 		
 		updateTimer.start();
+
+		LogProb addedTransitionProb = LogProb.makeFromExponent(-1000);
+		LogProb totalXiProb = LogProb.safeSum(xiSumOverT.values());
 		
-		//update
-		for (StatePair s : transitionProbNumerator.keySet()) {
-			LogProb prob = new LogProb(transitionProbNumerator.get(s));
+		
+		for (StatePair pair : xiSumOverT.keySet()) {
+			HMMState first = pair.start;
+		
 			
-			s.start.updateChild(s.end, prob.sub(new LogProb(commonDenominator)));
-		}
-		for (HMMState state : emissionProbNumerator.keySet()) {
-			for (String word : emissionProbNumerator.get(state).keySet()) {
-				LogProb prob = new LogProb(emissionProbNumerator.get(state).get(word));
-				state.setEmission(word, prob.sub(new LogProb(commonDenominator)));	
-			}
+			
+			
+			LogProb prob = xiSumOverT.get(pair).sub(gammaSumOverT.get(first));
+			
+			/*prob = LogProb.safeSum(prob, addedTransitionProb);
+			prob = prob.sub(LogProb.safeSum(totalXiProb, new LogProbaddedTransitionProb * xiSumOverT.size())));
+			*/
+			first.updateChild(pair.end, prob);
 		}
 		
+		for (StateWord sw : gammaDotObservationVectorSum.keySet()) {
+			sw.start.setEmission(sw.end, gammaDotObservationVectorSum.get(sw));
+		}
+		
+		this.smoothTransitions();
 		this.normalizeTransitions();
 		
 		
@@ -1595,7 +1613,6 @@ public class HiddenMarkovModel {
 			t.start();
 			baumWelchStep(trainingDocs, testingDocs, printTiming);
 			if (printTiming) t.stopAndPrintFuncTiming("Full Baum-Welch Step");
-			smoothTransitions();
 			normalizeTransitions();
 			
 			double postScore = scorer.apply(this);
@@ -1834,6 +1851,19 @@ public class HiddenMarkovModel {
 		
 	}
 	
+	public static HiddenMarkovModel fromFile(String filename) {
+		try {
+			ObjectInputStream in = new ObjectInputStream(new FileInputStream(filename));
+			HiddenMarkovModel model = (HiddenMarkovModel) in.readObject();
+			in.close();
+			
+			return model;
+		} catch (Exception e) {
+			System.out.println("Couldn't load HMM model "+filename+"\n"+e.getMessage());
+			return null;
+		}
+	}
+	
 	public Set<ConvertedWord> extract(List<ConvertedWord> doc, boolean extractSingle, Function<List<ConvertedWord>, ConvertedWord> concatFunc) {
 		List<String> convertedDoc = new ArrayList<String>();
 		for (ConvertedWord w : doc) convertedDoc.add(w.get());
@@ -1854,13 +1884,13 @@ public class HiddenMarkovModel {
 				capturingTokens.add(doc.get(i));
 			}
 			else {
-				if (capturingTokens.size() > 0) allCapturedTokens.add(concatFunc.apply(capturingTokens));
+				if (capturingTokens.size() > 0) allCapturedTokens.add(concatFunc.apply(capturingTokens).tryPhraseComplete());
 				capturingTokens.clear();
 			}
 				
 		}
 		
-		if (capturing && capturingTokens.size() > 0) allCapturedTokens.add(concatFunc.apply(capturingTokens));
+		//if (capturing && capturingTokens.size() > 0) allCapturedTokens.add(concatFunc.apply(capturingTokens));
 
 		/*
 		if (extractSingle) {
