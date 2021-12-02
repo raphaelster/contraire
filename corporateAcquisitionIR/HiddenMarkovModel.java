@@ -831,6 +831,7 @@ class HMMState implements Serializable {
 		return out;
 	}
 	
+	
 	public void replaceInvalidReferencesFromShallowCopy(Map<HMMState, HMMState> oldToNew, StateHierarchy newParent) {
 		Set<HMMState> oldTransitions = new HashSet<HMMState>();
 		oldTransitions.addAll(transitions.keySet());
@@ -1601,6 +1602,17 @@ public class HiddenMarkovModel  implements Serializable  {
 		//return this.test(trainingDocs);
 	}
 	
+
+	public String toGraphViz() {
+		String out = "";
+		for (HMMState s : states) {
+			for (HMMState other : s.getTransitions().keySet()) {
+				out += s + " -> " + other + " [label = \""+s.getTransitions().get(other)+"\"]\n";
+			}
+		}
+		return out;
+	}
+	
 	public void baumWelchOptimize(int numSteps, List<HMMTrainingDocument> trainingDocs, List<HMMTrainingDocument> testingDocs,
 								  boolean clear, boolean printTiming, Function<HiddenMarkovModel, Double> scorer) {
 		if (clear) normalizeProbabilities(trainingDocs);
@@ -1884,7 +1896,7 @@ public class HiddenMarkovModel  implements Serializable  {
 				capturingTokens.add(doc.get(i));
 			}
 			else {
-				if (capturingTokens.size() > 0) allCapturedTokens.add(concatFunc.apply(capturingTokens).tryPhraseComplete());
+				if (capturingTokens.size() > 0) allCapturedTokens.add(concatFunc.apply(capturingTokens));
 				capturingTokens.clear();
 			}
 				

@@ -25,29 +25,6 @@ import edu.stanford.nlp.trees.GrammaticalStructure;
 
 
 public class Train {
-	public static List<List<CoreLabel>> nerAugment(List<List<TaggedWord>> posFile, AbstractSequenceClassifier<CoreLabel> classifier) {
-		List<List<CoreLabel>> out = new ArrayList<List<CoreLabel>>();
-
-		for (List<TaggedWord> sentence : posFile) {
-			out.add(classifier.classifySentence(sentence));
-		}
-		
-		return out;
-	}
-	public static List<List<TaggedWord>> tagAugment(List<List<HasWord>> tokenizedFile, MaxentTagger tagger) {
-		List<List<TaggedWord>> out = new ArrayList<List<TaggedWord>>();
-
-		for (List<HasWord> sentence : tokenizedFile) {
-			out.add(tagger.tagSentence(sentence));
-		}
-		
-		return out;
-	}
-	public static List<GrammaticalStructure> parseAugment(List<List<TaggedWord>> tagged, DependencyParser parser) {
-		List<GrammaticalStructure> out = new ArrayList<GrammaticalStructure>();
-		for (List<TaggedWord> sentence : tagged) out.add(parser.predict(sentence));
-		return out;
-	}
 	
 	static class Score {
 		double correct;
@@ -128,101 +105,13 @@ public class Train {
 	
 	public static void main(String[] args) {
 
-		List<List<String>> trainFilepathList;
-		MaxentTagger tagger = new MaxentTagger("lib/tagger/english-left3words-distsim.tagger");
-		AbstractSequenceClassifier<CoreLabel> classifier;
-		DependencyParser parser;
 		
-		try {
-			classifier = CRFClassifier.getClassifier("lib/classifier/english.muc.7class.distsim.crf.ser.gz");
-			parser = DependencyParser.loadFromModelFile("edu/stanford/nlp/models/parser/nndep/english_UD.gz"); 
-			
-		} catch (Exception e) {
-			System.out.println("Failed to load NER classifier:\n"+e.getMessage());
-			return;
-		}
-		
-		
-		
-		List<List<String>> keyFilepathList;
-		
-		//AbstractSequenceClassifier<CoreLabel> classifier;
-
-		try {
-			trainFilepathList = Utility.readFile(args[0], false);
-			keyFilepathList = Utility.readFile(args[1], false);
-			//classifier = CRFClassifier.getClassifier("lib/classifier/english.muc.7class.distsim.crf.ser.gz");
-			//tagger = new MaxentTagger("lib/tagger/english-left3words-distsim.tagger");
-		}
-		catch (FileNotFoundException e) {
-			System.out.println("FileNotFoundException:\n"+e.getMessage());
-			return;
-		}
-		catch (Exception e) {
-			System.out.println(e.getMessage()); return;
-		}
+		FileConverter converter = new FileConverter("./");
 		
 
-		List<List<List<String>>> allTrainingFiles = new ArrayList<List<List<String>>>();
-		List<ExtractedResult> allKeyFiles = new ArrayList<ExtractedResult>();
+		List<List<List<String>>> allTrainingFiles = converter.readAllInputFiles(args[0]);
+		List<ExtractedResult> allKeyFiles = converter.readAllKeyFiles(args[1]);
 		
-		Function<List<List<String>>, List<List<String>>> tokenize = (s) -> {
-			List<List<HasWord>> hwList = MaxentTagger.tokenizeText(new ListListReader(s));
-			
-			List<List<String>> out = new ArrayList<List<String>>();
-			
-			for (List<HasWord> l : hwList) {
-				out.add(new ArrayList<String>());
-				for (HasWord h : l) {
-					out.get(out.size()-1).add(h.toString());
-				}
-			}
-			
-			return out;
-		};
-		
-		
-		
-		Function<List<List<String>>, List<List<ConvertedWord>>> tokenizeAugment = (s) -> {
-			List<List<HasWord>> hwList = MaxentTagger.tokenizeText(new ListListReader(s));
-			
-			List<List<TaggedWord>> tagged = tagAugment(hwList, tagger);
-			List<List<CoreLabel>> ner = nerAugment(tagged, classifier);
-			List<GrammaticalStructure> parsed = parseAugment(tagged, parser);
-			
-			return ConvertedWord.convertParsedFile(ner, parsed);
-		};
-		
-		Function<String, List<String>> tokenizeSingle = (s) -> {
-			List<List<String>> list = new ArrayList<List<String>>();
-			list.add(new ArrayList<String>());
-			list.get(0).add(s);
-			
-			List<List<String>> full = tokenize.apply(list);
-			
-			return Utility.flatten(full);
-		};
-		
-		try {
-			for (int i=0; i<trainFilepathList.size(); i++) {
-				List<String> trainList = trainFilepathList.get(i);
-				List<String> keyList = keyFilepathList.get(i);
-				
-				for (int j=0; j<trainList.size(); j++) {
-					String trainPath = trainList.get(j);
-					String keyPath = keyList.get(j);
-					
-					List<List<String>> trainFile = Utility.readFile(trainPath, false);
-					allTrainingFiles.add(trainFile);
-					List<List<String>> keyFile = Utility.readFile(keyPath, false);
-					allKeyFiles.add(ExtractedResult.fromKey(keyFile));
-				}
-			}
-		}
-		catch (FileNotFoundException e) {
-			System.out.println("FileNotFoundException while loading file in doclist:\n"+e.getMessage());
-			return;
-		}
 		
 		System.out.println("All training files loaded");
 		List<List<List<ConvertedWord>>> convertedCorpus = new ArrayList<List<List<ConvertedWord>>>();
@@ -230,7 +119,7 @@ public class Train {
 		Timer parseTimer = new Timer();
 		parseTimer.start();
 		for (List<List<String>> doc : allTrainingFiles) {
-			convertedCorpus.add(tokenizeAugment.apply(doc));
+			convertedCorpus.add(converter.tokenizeAugment(doc));
 		}
 		parseTimer.stopAndPrintFuncTiming("parsing training data");
 		
@@ -242,7 +131,7 @@ public class Train {
 		
 		
 		for (ResultField f : ResultField.values()) {
-			List<HMMTrainingDocument> allHMMTrainingFiles = HMMTrainingDocument.makeFromCorpusForField(convertedCorpus, allKeyFiles, f, tokenizeSingle);
+			List<HMMTrainingDocument> allHMMTrainingFiles = HMMTrainingDocument.makeFromCorpusForField(convertedCorpus, allKeyFiles, f, (s) -> {return FileConverter.tokenizeSingle(s);});
 
 			
 			int size = allHMMTrainingFiles.size();

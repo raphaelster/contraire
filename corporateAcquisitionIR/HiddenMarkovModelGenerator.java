@@ -28,10 +28,10 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 
 	public static HiddenMarkovModel evolveOptimal(List<HMMTrainingDocument> trainData, List<HMMTrainingDocument> testData,
 												  Function<HiddenMarkovModel, Double> evaluator, ResultField f) {
-		final int TOTAL_STEPS = 10;
+		final int TOTAL_STEPS = 4;
 		final int MAX_NUM_CANDIDATES = 4;
 		
-		final int OPT_STEPS = 10;
+		final int OPT_STEPS = 1;
 		
 		Comparator<Candidate> candidateComparator = (a, b) -> {
 			if (a.score < b.score) return 1;
@@ -69,7 +69,7 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 			
 
 			for (Candidate c : keptCandidates) {
-				c.save(f+"/"+c.score);
+				c.save(f+"_"+c.score);
 			}
 			keptCandidates.clear();
 			
@@ -99,7 +99,7 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 		
 		Collections.sort(keptCandidates, candidateComparator);
 		
-		keptCandidates.get(0).save(f+"_FINAL");
+		keptCandidates.get(0).save(f+"_FINAL_"+keptCandidates.get(0).score);
 		return keptCandidates.get(0).model;
 	}
 	
@@ -172,7 +172,7 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 			
 			try {
 				String subFilename = nameExcludingUniquePostfix+"_"+System.nanoTime();
-				subFilename.replaceAll("\\.", "-");
+				subFilename = subFilename.replaceAll(".", "-");
 				ObjectOutputStream objOut = new ObjectOutputStream(new FileOutputStream("./models/"+subFilename+".ser"));
 				
 				objOut.writeObject(model);

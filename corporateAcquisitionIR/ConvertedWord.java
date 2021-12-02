@@ -1,8 +1,6 @@
 package corporateAcquisitionIR;
 
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -32,7 +30,6 @@ public class ConvertedWord {
 		concatenated.add(this);
 	}
 	
-	
 	private static Pattern numberPattern = Pattern.compile("(\\d+,)*\\d+(\\.\\d+)?");
 
 	private static class TreeNode {
@@ -40,24 +37,6 @@ public class ConvertedWord {
 		public Set<TreeNode> children;
 		ConvertedWord value;
 		Integer idx;
-
-		public Set<TreeNode> getAllChildren() {
-			Stack<TreeNode> traversal = new Stack<TreeNode>();
-			Set<TreeNode> visited = new HashSet<TreeNode>();
-			
-			traversal.add(this);
-			
-			while (!traversal.isEmpty()) {
-				TreeNode top = traversal.pop();
-				visited.add(top);
-				for (TreeNode next : top.children) {
-					if (visited.contains(next)) continue;
-					traversal.add(next);
-				}
-			}
-
-			return visited;
-		}
 		
 		public TreeNode(TreeNode p, int i) {
 			parent = p;
@@ -78,7 +57,7 @@ public class ConvertedWord {
 				
 				for (TreeNode next : top.children) {
 					if (visited.contains(next)) continue;
-					traversal.add(next);
+					traversal.add(top);
 				}
 			}
 			return false;
@@ -98,7 +77,6 @@ public class ConvertedWord {
 			
 			boolean changed = true;
 			while (changed) {
-				changed = false;
 				for (TreeNode n : head.children) {
 					boolean valid = true;
 					
@@ -122,7 +100,7 @@ public class ConvertedWord {
 		
 	}
 	
-	public static List<List<ConvertedWord>> convertParsedFile(List<List<CoreLabel>> doc, List<GrammaticalStructure> parsed) {
+	public static List<List<ConvertedWord>> convertParsedFile(List<List<CoreLabel>> doc) {
 		
 		List<List<ConvertedWord>> out = new ArrayList<List<ConvertedWord>>();
 		Set<String> businessSuffixes = new HashSet<String>();
@@ -152,64 +130,12 @@ public class ConvertedWord {
 			}
 		}
 	
-
-		for (int i=0; i<doc.size(); i++) {
-			GrammaticalStructure cur = parsed.get(i);
-			List<ConvertedWord> line = out.get(i);
-			
-			Map<ConvertedWord, TreeNode> treeStructure = new HashMap<ConvertedWord, TreeNode>();
-		
-			for (TypedDependency d : cur.typedDependencies()) {
-				if (d.gov().index() == 0) continue;
-				
-				ConvertedWord gov = line.get(d.gov().index()-1);
-				ConvertedWord dep = line.get(d.dep().index()-1);
-				
-				treeStructure.putIfAbsent(gov, new TreeNode(null, d.gov().index()-1));
-				treeStructure.putIfAbsent(dep, new TreeNode(null, d.dep().index()-1));
-				
-				treeStructure.get(gov).value = gov;
-				treeStructure.get(dep).value = dep;
-				
-				treeStructure.get(gov).children.add(treeStructure.get(dep));
-				treeStructure.get(dep).parent = treeStructure.get(gov);
-			}
-
-			for (ConvertedWord w : line) w.context = treeStructure;
-		}
 		return out;
 	}
 	
 	public String getOriginal()  { return rawWord; }
 	public String get() { return convertedWord; }
 
-	
-	public ConvertedWord tryPhraseComplete() {
-		List<TreeNode> concat = new ArrayList<TreeNode>();
-		for (ConvertedWord w : concatenated) concat.add(context.get(w));
-		TreeNode head = TreeNode.getSubtreeHead(concat);
-		
-		if (head == null) return this;
-		
-		Map<Integer, ConvertedWord> last = new HashMap<Integer, ConvertedWord>();
-		for (TreeNode leaf : head.getAllChildren()) {
-			last.put(leaf.idx, leaf.value);
-		}
-
-
-		List<Integer> finalList = new ArrayList<Integer>();
-		
-		for (Integer i : last.keySet()) finalList.add(i);
-		Collections.sort(finalList);
-		
-		List<ConvertedWord> out = new ArrayList<ConvertedWord>();
-		for (Integer i : finalList) {
-			out.add(last.get(i));
-		}
-		
-		return concatenate(out);
-		
-	}
 	
 	//characters to sanitize whitespace for:
 	// ' . , ( ) -
@@ -247,7 +173,6 @@ public class ConvertedWord {
 		for (String newWord = mergeAcronymPattern.matcher(out.rawWord).replaceAll((m) -> {return m.group(1) + m.group(2);}); newWord != out.rawWord; out.rawWord = newWord);
 	
 		out.concatenated = list;
-		out.context = list.get(0).context;
 		return out;
 	}
 	
