@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Random;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -27,8 +28,8 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 	
 
 	public static HiddenMarkovModel evolveOptimal(List<HMMTrainingDocument> trainData, List<HMMTrainingDocument> testData,
-												  Function<HiddenMarkovModel, Double> evaluator, ResultField f) {
-		final int TOTAL_STEPS = 4;
+												  Function<HiddenMarkovModel, Double> evaluator, ResultField f, Random pertubator) {
+		final int TOTAL_STEPS = 10;
 		final int MAX_NUM_CANDIDATES = 4;
 		
 		final int OPT_STEPS = 1;
@@ -45,13 +46,15 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 			Timer mutationTimer = new Timer();
 			out = mutatorList.parallelStream()
 			//out = mutatorList.stream()
-				.map((evolution) -> {return new Candidate(evolution, OPT_STEPS, trainData, testData, evaluator);})
+				.map((evolution) -> {return Candidate.makeCandidate(evolution, OPT_STEPS, trainData, testData, evaluator, pertubator);})
 				.collect(Collectors.toList());
+			
+			out.removeIf((s) -> {return s == null;});
 			
 			return out;
 		};
 		
-		Candidate initialCandidate = new Candidate(new ArrayList<Mutator>(), OPT_STEPS, trainData, testData, evaluator);
+		Candidate initialCandidate = new Candidate(new ArrayList<Mutator>(), OPT_STEPS, trainData, testData, evaluator, pertubator);
 		
 		List<Candidate> out = new ArrayList<Candidate>();
 		out.add(initialCandidate);
@@ -81,6 +84,8 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 				List<Candidate> evolutions = applyMutatorsParallel.apply(mutations);
 				mutationTimer.stopAndPrintFuncTiming("Batch of mutations for "+parent);
 				
+				String gv = parent.model.toGraphViz();
+				
 				/*for (List<Mutator> evolutionPath : mutations) {
 					out.add(new Candidate(evolutionPath, OPT_STEPS, trainData, testData, evaluator));
 				}*/
@@ -93,12 +98,13 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 			for (int k=0; k<MAX_NUM_CANDIDATES; k++) goodCandidates.add(out.get(k));
 			out = goodCandidates;
 			keptCandidates.add(out.get(0));
-			
+			String gv = out.get(0).model.toGraphViz();
 			System.out.println("Finished generation "+i+"/"+TOTAL_STEPS);
 		}
 		
 		Collections.sort(keptCandidates, candidateComparator);
 		
+		String gv = keptCandidates.get(0).model.toGraphViz();
 		keptCandidates.get(0).save(f+"_FINAL_"+keptCandidates.get(0).score);
 		return keptCandidates.get(0).model;
 	}
@@ -111,14 +117,26 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 		double score;
 		List<Mutator> priorMutations;
 		
-		public Candidate(List<Mutator> mutations, int optSteps, List<HMMTrainingDocument> trainData, List<HMMTrainingDocument> testData,
-				 Function<HiddenMarkovModel, Double> evaluator) {
+		private Candidate(List<Mutator> mutations, int optSteps, List<HMMTrainingDocument> trainData, List<HMMTrainingDocument> testData,
+				 Function<HiddenMarkovModel, Double> evaluator, Random pertubator) {
 			priorMutations = mutations;
 			
 			model = HiddenMarkovModel.generateBasicModel();
 			for (Mutator m : mutations) model = m.apply(model);
-			model.baumWelchOptimize(optSteps, trainData, testData, true, false, evaluator);
+			model.baumWelchOptimize(optSteps, trainData, testData, true, false, evaluator, pertubator);
 			score = evaluator.apply(model);
+		}
+		
+		public static Candidate makeCandidate(List<Mutator> mutations, int optSteps, List<HMMTrainingDocument> trainData, List<HMMTrainingDocument> testData,
+				 Function<HiddenMarkovModel, Double> evaluator, Random pertubator) {
+			try {
+				Candidate c = new Candidate(mutations, optSteps, trainData, testData, evaluator, pertubator);
+				return c;
+			}
+			catch (Exception e) {
+				return null;
+			}
+			
 		}
 		
 		private List<Mutator> getPossibleMutations(List<HMMState> category) {
@@ -172,7 +190,7 @@ public class HiddenMarkovModelGenerator extends HiddenMarkovModel {
 			
 			try {
 				String subFilename = nameExcludingUniquePostfix+"_"+System.nanoTime();
-				subFilename = subFilename.replaceAll(".", "-");
+				subFilename = subFilename.replaceAll("\\.", "-");
 				ObjectOutputStream objOut = new ObjectOutputStream(new FileOutputStream("./models/"+subFilename+".ser"));
 				
 				objOut.writeObject(model);

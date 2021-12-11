@@ -10,11 +10,15 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.Stack;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
+
+import edu.stanford.nlp.parser.shiftreduce.CreateTransitionSequence;
+
 
 enum StateType {
 	PREFIX,
@@ -90,6 +94,7 @@ class StateHierarchy implements Serializable {
 		for (int i=0; i<lambdas.size(); i++)  lambdas.set(i, lambdas.get(i) / sum);
 		
 	}
+	
 	
 	void optimizeLambdaStep(HMMState child, Set<String> emissionsSeenForThisState, double totalUniqueWords) {
 		normalizeLambdas();
@@ -317,6 +322,30 @@ class HMMState implements Serializable {
 		}
 	}
 	
+	class StringProb {
+		public String str;
+		public LogProb prob;
+		
+		public StringProb(String s, LogProb p) {str = s; prob = p;}
+		
+	}
+	
+	List<StringProb> getNBestEmissions(int n) {
+		List<String> best = new ArrayList<String>();
+		
+		for (String s : emissions.keySet()) {
+			best.add(s);
+			Collections.sort(best, (a, b) -> {return Double.compare(emissions.get(b).getValue(), emissions.get(a).getValue());});
+			if (best.size() > n) best.remove(best.size()-1);
+		}
+		
+		List<StringProb> out = new ArrayList<StringProb>();
+		
+		for (String s : best) out.add(new StringProb(s, emissions.get(s)));
+		
+		return out;
+	}
+	
 	public String toString() {
 		return getToStringWithoutChildren();
 		
@@ -330,6 +359,18 @@ class HMMState implements Serializable {
 		
 		if (transitions.keySet().size() > 0) out = out.substring(0, out.length()-2);
 		return out + "]";*/
+	}
+	
+
+	public void pertube(Random r) {
+		LogProb minEmission = new LogProb(0.0);
+		for (LogProb l : emissions.values()) if (l.getValue() > minEmission.getValue()) minEmission = l;
+		
+		LogProb pertubationMagnitude = minEmission.sub(LogProb.makeFromExponent(-8));
+		for (String s : emissions.keySet()) {
+			if (r.nextBoolean()) emissions.put(s, emissions.get(s).add(pertubationMagnitude));
+			else 				 emissions.put(s, emissions.get(s).sub(pertubationMagnitude));	
+		}
 	}
 	
 	//need to recreate hierarchy
@@ -433,7 +474,8 @@ class HMMState implements Serializable {
 		
 		totalUniqueWords++;	//+1 for all unknown words
 		
-		double addKVal = 1.0 / totalUniqueWords / 2.0 / 500000.0;
+		//double addKVal = 1.0 / totalUniqueWords / 2.0 / 500000.0;
+		LogProb addKVal = LogProb.makeFromExponent(-500);
 		
 		Set<String> keysToRemove = new HashSet<String>();
 
@@ -454,8 +496,8 @@ class HMMState implements Serializable {
 		
 		LogProb emissionsSum = LogProb.safeSum(emissions.values());
 		for (String s : emissions.keySet()) {
-			LogProb prob = LogProb.safeSum(emissions.get(s), new LogProb(addKVal))
-					.sub(LogProb.safeSum(emissionsSum, new LogProb(addKVal * totalUniqueWords)));
+			LogProb prob = LogProb.safeSum(emissions.get(s), addKVal)
+					.sub(LogProb.safeSum(emissionsSum, new LogProb(totalUniqueWords).add(addKVal)));
 			emissions.put(s,  emissions.get(s).sub(emissionsSum));
 		}
 		
@@ -464,7 +506,7 @@ class HMMState implements Serializable {
 		//double emissionSum = 0.0;
 		//for (LogProb p : emissions.values()) emissionSum += p.getActualProbability();
 		
-		defaultEmissionProbability = new LogProb(addKVal);
+		defaultEmissionProbability = addKVal.sub(emissionsSum);
 		
 		
 	}
@@ -571,7 +613,7 @@ class HMMState implements Serializable {
 		}
 	}
 	
-	private static String dumpProbabilityTableState(List<Map<HMMState, LogProb>> sparseMap, List<List<String>> doc, List<List<TargetEvent>> events, double totalUniqueWords) {
+	private static String dumpProbabilityTableState(List<Map<HMMState, LogProb>> sparseMap, List<String> doc, List<TargetEvent> events, double totalUniqueWords) {
 		Set<HMMState> allSeenStates = new HashSet<HMMState>();
 		
 		String message = "IsNaN found after renormalization:\nsparseMap:\n";
@@ -596,11 +638,9 @@ class HMMState implements Serializable {
 		
 		message += "idx, document, target events\n";
 		int idx = 0;
-		List<String> flat = Utility.flatten(doc);
-		List<TargetEvent> flatEvents = Utility.flatten(events);
 		
-		for (int i=0; i<flat.size(); i++) {
-			message += i + "\t" + flatEvents.get(i) + "\t" + flat.get(i) + "\n";
+		for (int i=0; i<doc.size(); i++) {
+			message += i + "\t" + events.get(i) + "\t" + doc.get(i) + "\n";
 		}
 		
 		message += "\nemission probabilities:\n";
@@ -611,71 +651,66 @@ class HMMState implements Serializable {
 		return message;
 	}
 	
-	public ProbabilityTable getForwardsProbabilityTable(List<List<String>> doc, List<List<TargetEvent>> events, double totalUniqueWords) {
+	public ProbabilityTable getForwardsProbabilityTable(List<String> doc, List<TargetEvent> events, double totalUniqueWords) {
 		List<Map<HMMState, LogProb>> sparseMap = new ArrayList<Map<HMMState, LogProb>>();
 		
 		if (doc.size() == 0) return new ProbabilityTable(sparseMap);
 		
-		int totalWordsToProcess = 0;
-		
-		for (List<String> s : doc) totalWordsToProcess += s.size();
 		
 		
 		Map<HMMState, LogProb> startNode = new HashMap<HMMState, LogProb>();
-		startNode.put(this, this.getEmissionProbability(doc.get(0).get(0), totalUniqueWords));
+		startNode.put(this, this.getEmissionProbability(doc.get(0), totalUniqueWords));
 		sparseMap.add(startNode);
 		
 		if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(startNode);
 	
-		int wordsProcessed = 1;
-		
-		search_loop:
-		for (int sIdx=0; sIdx < doc.size(); sIdx++) {
-			List<String> sequence = doc.get(sIdx);
+		for (int i=1; i<doc.size(); i++) {
 			
-			int firstIdx = (sIdx == 0 ? 1 : 0);
+			String curStr = doc.get(i);
+			TargetEvent curEvent = events.get(i);
 			
-			for (int i=firstIdx; i<sequence.size(); i++) {
-				if (wordsProcessed == totalWordsToProcess) break search_loop;
-				wordsProcessed++;
-				
-				String curStr = sequence.get(i);
-				TargetEvent curEvent = events.get(sIdx).get(i);
-				
-				Map<HMMState, LogProb> top = sparseMap.get(sparseMap.size() - 1);
-				
-				Map<HMMState, Map<HMMState, LogProb>> transitions = new HashMap<HMMState, Map<HMMState, LogProb>>();
-				
-				for (HMMState s : top.keySet()) {
-					transitions.put(s, new HashMap<HMMState, LogProb>());
-					transitions.get(s).putAll(s.transitions);
-				}
-				
-				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent, false, totalUniqueWords);
-				
-				if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(nextMap);
-				 
-				boolean hasNaN = false; 
-				for (LogProb p  : nextMap.values()) if (Double.isNaN(p.getActualProbability())) hasNaN = true;
-				
-				if (hasNaN || nextMap.size() == 0) {
-					String message = dumpProbabilityTableState(sparseMap, doc, events, totalUniqueWords);
+			Map<HMMState, LogProb> top = sparseMap.get(sparseMap.size() - 1);
+			
+			Map<HMMState, Map<HMMState, LogProb>> transitions = new HashMap<HMMState, Map<HMMState, LogProb>>();
+			
+			for (HMMState s : top.keySet()) {
+				transitions.put(s, new HashMap<HMMState, LogProb>());
+				for (HMMState other : s.transitions.keySet()) {
+					boolean ignore = false;
+					if (other.getType() == StateType.PREFIX) {
+						int expectedTargetIdx = i;
+						for (HMMState curChild = other; curChild.getType() == StateType.PREFIX; curChild = curChild.transitions.keySet().iterator().next()) {
+							expectedTargetIdx++;
+						}
+						ignore = expectedTargetIdx >= doc.size() || events.get(expectedTargetIdx) != TargetEvent.ENTER;
+					}
 					
-					throw new IllegalStateException(message+"\n(forwards prob)");
+					if (!ignore) transitions.get(s).put(other, s.transitions.get(other));
 				}
-					
-				sparseMap.add(nextMap);
-				
-
-				
+				//transitions.get(s).putAll(s.transitions);
 			}
+			
+			Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent, false, totalUniqueWords);
+			
+			if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(nextMap);
+			 
+			boolean hasNaN = false; 
+			for (LogProb p  : nextMap.values()) if (Double.isNaN(p.getActualProbability())) hasNaN = true;
+			
+			if (hasNaN || nextMap.size() == 0) {
+				String message = dumpProbabilityTableState(sparseMap, doc, events, totalUniqueWords);
+				
+				throw new IllegalStateException(message+"\n(forwards prob)");
+			}
+				
+			sparseMap.add(nextMap);
 		}
 
 		return new ProbabilityTable(sparseMap);
 	}
 	
 
-	public ProbabilityTable getBackwardsProbabilityTable(Set<HMMState> allStates, List<List<String>> doc, List<List<TargetEvent>> events,
+	public ProbabilityTable getBackwardsProbabilityTable(Set<HMMState> allStates, List<String> doc, List<TargetEvent> events,
 														 double totalUniqueWords) {
 		List<Map<HMMState, LogProb>> sparseMap = new ArrayList<Map<HMMState, LogProb>>();
 		
@@ -683,68 +718,72 @@ class HMMState implements Serializable {
 		
 		if (doc.size() == 0) return new ProbabilityTable(sparseMap);
 		
+		int phiAvailableIdx = -1;
+		for (int i=0; i<events.size(); i++) if (events.get(i) == TargetEvent.ENTER) {
+			phiAvailableIdx = i;
+			break;
+		}
 		
 		Map<HMMState, LogProb> startNode = new HashMap<HMMState, LogProb>();
 		for (HMMState s : allStates) {
-			if (s.getType() != StateType.TARGET) startNode.put(s, new LogProb(1.0));
+			if (s.getType() != StateType.TARGET
+			    && !(s.getType() == StateType.PHI && phiAvailableIdx != -1)) startNode.put(s, new LogProb(1.0));
 		}
 		sparseMap.add(startNode);
 
 		if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(startNode);
 	
-		int totalSize = 0;
-		for (List<String> sentence : doc) totalSize += sentence.size();
 		
-		final int LAST_WORD = totalSize - stopAtIthWord;
+		final int LAST_WORD = doc.size() - stopAtIthWord;
 		
 		int wordsProcessed = 0;
 		
 		search_loop:
-		for (int sIdx=doc.size()-1; sIdx >= 0; sIdx--) {
-			List<String> sequence = doc.get(sIdx);
+		for (int i=doc.size()-2; i>=0; i--) {
+			if (wordsProcessed == LAST_WORD) break search_loop;
+			wordsProcessed++;
 			
-			int firstIdx = sequence.size()-1;
-			//if (sIdx == doc.size()-1) firstIdx--;
-			for (int i=firstIdx; i>=0; i--) {
-				if (wordsProcessed == LAST_WORD) break search_loop;
-				wordsProcessed++;
-				
-				String curStr = sequence.get(i);
-				
-				TargetEvent curEvent = null;
-				if (events.get(sIdx).size() <= i+1) {
-					if (sIdx+1 >= events.size()) curEvent = TargetEvent.NO_EVENT;
-					else curEvent = events.get(sIdx+1).get(0);
-				}
-				else curEvent = events.get(sIdx).get(i+1);
-				
-				Map<HMMState, LogProb> top = sparseMap.get(sparseMap.size() - 1);
-				
-				Map<HMMState, Map<HMMState, LogProb>> transitions = new HashMap<HMMState, Map<HMMState, LogProb>>();
-				
-				for (HMMState s : top.keySet()) {
-					transitions.put(s, new HashMap<HMMState, LogProb>());
-					for (HMMState parent : s.parents) {
-						transitions.get(s).put(parent, parent.transitions.get(s));
+			String curStr = doc.get(i);
+			
+			TargetEvent curEvent = null;
+			curEvent = events.get(i+1);
+			
+			Map<HMMState, LogProb> top = sparseMap.get(sparseMap.size() - 1);
+			
+			Map<HMMState, Map<HMMState, LogProb>> transitions = new HashMap<HMMState, Map<HMMState, LogProb>>();
+			
+			for (HMMState s : top.keySet()) {
+				transitions.put(s, new HashMap<HMMState, LogProb>());
+				for (HMMState parent : s.parents) {
+					boolean ignore = false;
+					if (parent.getType() == StateType.SUFFIX) {
+						int expectedTargetIdx = i;
+						for (HMMState curParent = parent; curParent.getType() == StateType.SUFFIX; curParent = curParent.parents.iterator().next()) {
+							expectedTargetIdx--;
+						}
+						ignore = expectedTargetIdx < 0 || events.get(expectedTargetIdx+1) != TargetEvent.EXIT;
 					}
-				}
-
-				Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent, true, totalUniqueWords);
-  
-				if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(nextMap);
-
-				for (LogProb p  : nextMap.values()) if (Double.isNaN(p.getActualProbability())) {
-					String message = dumpProbabilityTableState(sparseMap, doc, events, totalUniqueWords);
+					else if (parent.getType() == StateType.PHI) ignore = i > phiAvailableIdx;
 					
-					throw new IllegalStateException(message+"\n(backwards prob)");
+					if (!ignore) transitions.get(s).put(parent, parent.transitions.get(s));
 				}
-					
-				
-				sparseMap.add(nextMap);
 			}
+
+			Map<HMMState, LogProb> nextMap = directionalProbabilityStep(top, transitions, curStr, curEvent, true, totalUniqueWords);
+  
+			if (HiddenMarkovModel.RENORMALIZE) renormalizeColumn(nextMap);
+
+			for (LogProb p  : nextMap.values()) if (Double.isNaN(p.getActualProbability())) {
+				String message = dumpProbabilityTableState(sparseMap, doc, events, totalUniqueWords);
+				
+				throw new IllegalStateException(message+"\n(backwards prob)");
+			}
+			
+			
+			sparseMap.add(nextMap); 
 		}
 		
-		Collections.reverse(sparseMap);
+		Collections.reverse(sparseMap); 
 
 		return new ProbabilityTable(sparseMap);
 	}
@@ -1128,6 +1167,17 @@ public class HiddenMarkovModel  implements Serializable  {
 			if (other == oldLast) other = last;
 			last.addChild(other, chance);
 		}
+		
+		//kind of a hack, targets are the only type that connect to others of same type
+		for (HMMState otherTrg : targetStateHeads) {
+			if (otherTrg == last) continue;
+			
+			last.addChild(otherTrg, new LogProb(1.0 / targetStateHeads.size() / last.getTransitions().size()));
+			otherTrg.addChild(last, new LogProb(1.0 / otherTrg.getTransitions().size()));
+			
+			otherTrg.normalizeTransitions();
+		}
+		last.normalizeTransitions();
 	}
 	//void split()
 	
@@ -1243,12 +1293,12 @@ public class HiddenMarkovModel  implements Serializable  {
 		}
 	}
 	
-	public HMMState.ProbabilityTable getForwardsProbabilityTable(List<List<String>> words, List<List<TargetEvent>> events, double totalUniqueWords) {
+	public HMMState.ProbabilityTable getForwardsProbabilityTable(List<String> words, List<TargetEvent> events, double totalUniqueWords) {
 		return start.getForwardsProbabilityTable(words, events, totalUniqueWords);
 	}
 	
 
-	public HMMState.ProbabilityTable getBackwardsProbabilityTable(List<List<String>> words, List<List<TargetEvent>> events, double totalUniqueWords) {
+	public HMMState.ProbabilityTable getBackwardsProbabilityTable(List<String> words, List<TargetEvent> events, double totalUniqueWords) {
 		return start.getBackwardsProbabilityTable(states, words, events, totalUniqueWords);
 	}
 	
@@ -1514,12 +1564,13 @@ public class HiddenMarkovModel  implements Serializable  {
 			
 			//do any parsing necessary
 			List<List<TargetEvent>> targetEvents = getTargetEvents(fullDoc);
+			List<TargetEvent> flattenedEvents = Utility.flatten(targetEvents);
 			
 			parseTimer.pause();
 			
 			tableTimer.start();
-			HMMState.ProbabilityTable forwardsTable  = this.getForwardsProbabilityTable(doc, targetEvents, totalUniqueWords);
-			HMMState.ProbabilityTable backwardsTable = this.getBackwardsProbabilityTable(doc, targetEvents, totalUniqueWords);
+			HMMState.ProbabilityTable forwardsTable  = this.getForwardsProbabilityTable(flattenedDoc, flattenedEvents, totalUniqueWords);
+			HMMState.ProbabilityTable backwardsTable = this.getBackwardsProbabilityTable(flattenedDoc, flattenedEvents, totalUniqueWords);
 			XiTable xiTable = this.getXiTable(flattenedDoc, forwardsTable, backwardsTable, totalUniqueWords);
 			tableTimer.pause();
 			
@@ -1605,35 +1656,70 @@ public class HiddenMarkovModel  implements Serializable  {
 
 	public String toGraphViz() {
 		String out = "";
+		HashMap<StateType, String> typeClusters = new HashMap<StateType, String>();
 		for (HMMState s : states) {
+			typeClusters.putIfAbsent(s.getType(), "");
+			typeClusters.put(s.getType(), typeClusters.get(s.getType()) + s.toString() + "\n");
+		}
+		
+		for (StateType t : StateType.values()) {
+			out += "subgraph cluster_"+t.toString() + "{\nstyle = filled; color = lightgrey;\n";
+			out += typeClusters.get(t);
+			out += "}\n";
+		}
+		
+		final double RED_PROBABILITY = 15.0;
+		
+		for (HMMState s : states) {
+			//String name = s.toString() + "[label = \"\\n"+s.toString()+"\\n\\n";
+			String name = s.toString() + "[label = \""+s.toString();
+			for (HMMState.StringProb sp : s.getNBestEmissions(20)) name += "\\n P(" + sp.str.replaceAll("\"", "\\\"")+ ") = " + sp.prob;
+			
+			out += name + "\"]\n";
+			
 			for (HMMState other : s.getTransitions().keySet()) {
-				out += s + " -> " + other + " [label = \""+s.getTransitions().get(other)+"\"]\n";
+				double transitionExponent = Utility.clamp(-s.getTransitions().get(other).getValue(), 0.0, RED_PROBABILITY)/RED_PROBABILITY;
+				double hue = Utility.lerp(transitionExponent, 0.3, 0.0);
+				double saturation = Utility.lerp(transitionExponent, 0.9, 0.6);
+				double value = (transitionExponent == 0.0 ? 0.6 : 0.4);
+				
+				out += s + " -> " + other + " [color = \"" + hue + " " + saturation + " "+value+"\"]\n";
+				//out += s + " -> " + other + " [label = \""+s.getTransitions().get(other)+"\"]\n";
 			}
 		}
-		return out;
+		return "digraph G {\n"+out+"\n}\n";
+	}
+	
+	private void pertubeStates(Random rng) {
+		for (HMMState s : states) s.pertube(rng);
 	}
 	
 	public void baumWelchOptimize(int numSteps, List<HMMTrainingDocument> trainingDocs, List<HMMTrainingDocument> testingDocs,
-								  boolean clear, boolean printTiming, Function<HiddenMarkovModel, Double> scorer) {
+								  boolean clear, boolean printTiming, Function<HiddenMarkovModel, Double> scorer,
+								  Random pertubator) {
 		if (clear) normalizeProbabilities(trainingDocs);
 		
 		Timer t = new Timer();
-		double prevScore = scorer.apply(this);
+		//double prevScore = scorer.apply(this);
+		double prevScore = -1;
+		if (printTiming) prevScore = scorer.apply(this);
 		
 		for (int i=0; i < numSteps; i++) {
+			this.pertubeStates(pertubator);
 			if (printTiming) System.out.println("Beginning training step");
 			t.start();
 			baumWelchStep(trainingDocs, testingDocs, printTiming);
 			if (printTiming) t.stopAndPrintFuncTiming("Full Baum-Welch Step");
 			normalizeTransitions();
 			
-			double postScore = scorer.apply(this);
 			
 			//do_stuff()?
 			if (printTiming) {
+				double postScore = scorer.apply(this);
+				
 				System.out.println(prevScore+" -> "+postScore);
+				prevScore = postScore;
 			}
-			prevScore = postScore;
 		}
 	}
 	
@@ -1713,7 +1799,7 @@ public class HiddenMarkovModel  implements Serializable  {
 		for (HMMState s : prefixStateHeads) replaceConnection(s, false, new StateType[] {StateType.TARGET});
 		for (HMMState s : suffixStateHeads) replaceConnection(s, false, new StateType[] {StateType.BACKGROUND, StateType.PREFIX});
 		for (HMMState s : backgroundStates) replaceConnection(s, true, new StateType[] {StateType.PREFIX});
-		for (HMMState s : targetStateHeads) replaceConnection(s, true, new StateType[] {StateType.SUFFIX});
+		for (HMMState s : targetStateHeads) replaceConnection(s, true, new StateType[] {StateType.SUFFIX, StateType.TARGET});
 		
 		this.normalizeTransitions();
 	}
@@ -1917,6 +2003,11 @@ public class HiddenMarkovModel  implements Serializable  {
 		
 		return allCapturedTokens;
 	}
+	
+	/*
+	public String toString() {
+		return toGraphViz();
+	}*/
 	
 	public List<Set<ConvertedWord>> extractAll(List<List<List<ConvertedWord>>> corpus, boolean extractSingle, Function<List<ConvertedWord>, ConvertedWord> concatFunc) {
 		List<Set<ConvertedWord>> out = new ArrayList<Set<ConvertedWord>>();

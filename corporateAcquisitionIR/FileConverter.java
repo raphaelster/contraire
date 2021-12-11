@@ -53,14 +53,14 @@ public class FileConverter {
 	AbstractSequenceClassifier<CoreLabel> classifier;
 	public FileConverter(String filepath) {
 
-		if (filepath.equals("")) tagger = new MaxentTagger("lib/tagger/english-left3words-distsim.tagger");
-		tagger = new MaxentTagger(filepath+"/tagger/english-left3words-distsim.tagger");
+		if (filepath == null) tagger = new MaxentTagger("lib/tagger/english-left3words-distsim.tagger");
+		else tagger = new MaxentTagger(filepath+"/tagger/english-left3words-distsim.tagger");
 
 		//DependencyParser parser;
 		
 		try {
-			if (filepath.equals("")) classifier = CRFClassifier.getClassifier("lib/classifier/english.muc.7class.distsim.crf.ser.gz");
-			classifier = CRFClassifier.getClassifier(filepath+"/classifier/english.muc.7class.distsim.crf.ser.gz");
+			if (filepath == null) classifier = CRFClassifier.getClassifier("lib/classifier/english.muc.7class.distsim.crf.ser.gz");
+			else classifier = CRFClassifier.getClassifier(filepath+"/classifier/english.muc.7class.distsim.crf.ser.gz");
 			//parser = DependencyParser.loadFromModelFile("edu/stanford/nlp/models/parser/nndep/english_UD.gz"); 
 			
 		} catch (Exception e) {

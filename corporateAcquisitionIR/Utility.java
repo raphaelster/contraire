@@ -66,4 +66,18 @@ public class Utility {
 		
 		return out;
 	}
+	
+
+	static public double lerp(double t, double a, double b) {
+		return (b-a)*t + a;
+	}
+	
+	static public double clamp(double t, double a, double b) {
+		if (b < a) {
+			double tmp = a;
+			a = b;
+			b = tmp;
+		}
+		return Math.max(Math.min(t, b), a);
+	}
 }

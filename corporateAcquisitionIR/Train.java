@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -57,6 +58,7 @@ public class Train {
 		}
 		
 		double totalExpected = expectedResults.size();
+		for (String s : expectedResults) if (s == null) totalExpected--;
 		double totalActual   = results.size();
 		
 		
@@ -93,6 +95,7 @@ public class Train {
 					
 		}
 		
+		String gv = model.toGraphViz();
 		double precision = totalCorrect / totalGuesses;
 		if (Double.isNaN(precision)) precision = Math.pow(10, -50);
 		double recall = totalCorrect / totalExpected;
@@ -106,20 +109,26 @@ public class Train {
 	public static void main(String[] args) {
 
 		
-		FileConverter converter = new FileConverter("./");
+		FileConverter converter = new FileConverter(null);
 		
 
 		List<List<List<String>>> allTrainingFiles = converter.readAllInputFiles(args[0]);
-		List<ExtractedResult> allKeyFiles = converter.readAllKeyFiles(args[1]);
+		List<ExtractedResult> allTrainingKeyFiles = converter.readAllKeyFiles(args[1]);
+		List<List<List<String>>> allTestFiles = converter.readAllInputFiles(args[2]);
+		List<ExtractedResult> allTestKeyFiles = converter.readAllKeyFiles(args[3]);
 		
 		
 		System.out.println("All training files loaded");
-		List<List<List<ConvertedWord>>> convertedCorpus = new ArrayList<List<List<ConvertedWord>>>();
-
+		List<List<List<ConvertedWord>>> convertedTrainCorpus = new ArrayList<List<List<ConvertedWord>>>();
+		List<List<List<ConvertedWord>>> convertedTestCorpus = new ArrayList<List<List<ConvertedWord>>>();
+		
 		Timer parseTimer = new Timer();
 		parseTimer.start();
 		for (List<List<String>> doc : allTrainingFiles) {
-			convertedCorpus.add(converter.tokenizeAugment(doc));
+			convertedTrainCorpus.add(converter.tokenizeAugment(doc));
+		}
+		for (List<List<String>> doc : allTestFiles) {
+			convertedTestCorpus.add(converter.tokenizeAugment(doc));
 		}
 		parseTimer.stopAndPrintFuncTiming("parsing training data");
 		
@@ -129,35 +138,35 @@ public class Train {
 		
 		boolean first = true;
 		
+		Random pertubator = new Random();
+		
 		
 		for (ResultField f : ResultField.values()) {
-			List<HMMTrainingDocument> allHMMTrainingFiles = HMMTrainingDocument.makeFromCorpusForField(convertedCorpus, allKeyFiles, f, (s) -> {return FileConverter.tokenizeSingle(s);});
-
+			List<HMMTrainingDocument> allHMMTrainingFiles = HMMTrainingDocument.makeFromCorpusForField(convertedTrainCorpus, allTrainingKeyFiles, f, (s) -> {return FileConverter.tokenizeSingle(s);});
+			List<HMMTrainingDocument> allHMMTestFiles = HMMTrainingDocument.makeFromCorpusForField(convertedTestCorpus, allTestKeyFiles, f, (s) -> {return FileConverter.tokenizeSingle(s);});
 			
 			int size = allHMMTrainingFiles.size();
 			int partSize = 3*size/4;
 
 			HiddenMarkovModel basic = HiddenMarkovModel.generateBasicModel();
-			List<HMMTrainingDocument> train = allHMMTrainingFiles.subList(0, partSize);
-			List<HMMTrainingDocument> test = allHMMTrainingFiles.subList(partSize, size);
+			List<HMMTrainingDocument> train = allHMMTrainingFiles;
+			List<HMMTrainingDocument> test = allHMMTestFiles;
 
-			List<List<List<ConvertedWord>>> test2 = new ArrayList<List<List<ConvertedWord>>>();
-			for (HMMTrainingDocument d : test) {
-				test2.add(d.text);
-			}
 
 			Function<HiddenMarkovModel, Double> scorer = (model) -> {
-				return scoreAll(model, test2, allKeyFiles.subList(partSize, size), f, false);
+				return scoreAll(model, convertedTestCorpus, allTestKeyFiles, f, false);
 			};
 
+			
 			if (first) {
 
 				HiddenMarkovModel profileHMM = HiddenMarkovModel.generateBasicModel();
-				profileHMM = HiddenMarkovModel.fromFile("./ACQBUS.ser");
+				//profileHMM = HiddenMarkovModel.fromFile("./ACQBUS.ser");
+				profileHMM = HiddenMarkovModel.generateBasicModel();
 
-				profileHMM.baumWelchOptimize(10, train, test, true, true, scorer);
-				
-				scoreAll(profileHMM, test2, allKeyFiles.subList(partSize, size), f, true);
+				profileHMM.baumWelchOptimize(20, train, test, true, true, scorer, pertubator);
+				String gv = profileHMM.toGraphViz();
+				scoreAll(profileHMM, convertedTestCorpus, allTestKeyFiles, f, true);
 				first = false;
 			}
 			
@@ -165,11 +174,11 @@ public class Train {
 			
 			//if (!tried && f == ResultField.ACQUIRED) {
 				//basic.extract(Utility.flatten(test.get(0).text), ExtractedResult.fieldIsSingular(f));
-			double prev = scoreAll(basic, test2, allKeyFiles.subList(partSize, size), f, verbose);
+			double prev = scoreAll(basic, convertedTestCorpus, allTestKeyFiles, f, verbose);
 			
-			HiddenMarkovModel best = HiddenMarkovModelGenerator.evolveOptimal(train, test, scorer, f);
+			HiddenMarkovModel best = HiddenMarkovModelGenerator.evolveOptimal(train, test, scorer, f, pertubator);
 			//basic.baumWelchOptimize(10, train, test, true, false);
-			double post  = scoreAll(basic, test2, allKeyFiles.subList(partSize, size), f, verbose);
+			double post  = scoreAll(basic, convertedTestCorpus, allTestKeyFiles, f, verbose);
 			
 			prevScores.put(f, prev);
 			postScores.put(f, post);

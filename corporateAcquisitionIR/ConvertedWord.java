@@ -181,4 +181,16 @@ public class ConvertedWord {
 		
 		return "("+convertedWord+"<-"+rawWord+")";
 	}
+	
+	public int hashCode() {
+		return rawWord.hashCode();
+	}
+	
+	public boolean equals(Object o) {
+		if (o instanceof ConvertedWord == false) return false;
+		
+		ConvertedWord other = (ConvertedWord) o;
+		
+		return this.rawWord.equals(other.rawWord);
+	}
 }

@@ -28,6 +28,10 @@ public class Main {
 	
 	public static void main(String[] args) {
 		Map<ResultField, HiddenMarkovModel> extractors = new HashMap<ResultField, HiddenMarkovModel>();
+
+		HiddenMarkovModel old = HiddenMarkovModel.fromFile("C:\\Users\\Raphael\\eclipse-workspace\\CorporateAcquisitionIR\\ACQBUS.ser");
+		String str = old.toGraphViz();
+		System.out.println(str);
 		
 		for (ResultField f : ResultField.values()) extractors.put(f,  HiddenMarkovModel.fromFile(args[1] + "/testModels/" + f.toString() + ".ser"));
 		List<List<String>> documentFilepathList;
